@@ -1,0 +1,59 @@
+# nxe-jwx/config.ngx — nginx build configuration
+#
+# Sourced by the parent module's `config` file.
+#
+# Prerequisites the caller MUST set before sourcing this file:
+#
+#   nxe_jwx_dir   absolute path to this submodule
+#   nxe_json_dir  absolute path to the nxe-json submodule
+#                 (the caller is responsible for sourcing
+#                 $nxe_json_dir/config.ngx itself; nxe-jwx does NOT
+#                 re-concatenate $nxe_json_module_srcs/libs to avoid
+#                 duplicating them in the parent's link line.)
+#
+# After sourcing, $nxe_jwx_module_{deps,srcs,incs,libs} are populated
+# and should be appended to the parent module's ngx_module_* lists.
+#
+# Optional: set NXE_JWX_HAVE_HMAC=1 (e.g. via CFLAGS) to enable
+# HS256/384/512 and oct-type JWK support.  Off by default.
+
+if [ -z "$nxe_jwx_dir" ]; then
+    echo "$0: error: nxe_jwx_dir is not set" >&2
+    exit 1
+fi
+
+if [ -z "$nxe_json_dir" ] || [ ! -f "$nxe_json_dir/config.ngx" ]; then
+    echo "$0: error: nxe-jwx requires nxe-json (>= v0.1.0)." \
+         "Set \$nxe_json_dir before sourcing this file." >&2
+    exit 1
+fi
+
+# nxe-json must be sourced by the parent before nxe-jwx; we only
+# borrow its include path here so that nxe-jwx headers can include
+# <nxe_json.h>.  Do NOT re-source $nxe_json_dir/config.ngx — that
+# would re-export $nxe_json_module_srcs/libs and the parent would
+# end up linking nxe-json twice.
+if [ -z "$nxe_json_module_incs" ]; then
+    echo "$0: error: nxe-json must be sourced before nxe-jwx" >&2
+    exit 1
+fi
+
+nxe_jwx_module_deps="\
+  $nxe_jwx_dir/src/nxe_jwx.h \
+  $nxe_jwx_dir/src/nxe_jwx_decode.h \
+  $nxe_jwx_dir/src/nxe_jwx_jwks.h \
+  $nxe_jwx_dir/src/nxe_jwx_jws.h \
+  $nxe_jwx_dir/src/nxe_jwx_claims.h \
+  $nxe_jwx_dir/src/nxe_jwx_internal.h \
+"
+nxe_jwx_module_srcs="\
+  $nxe_jwx_dir/src/nxe_jwx_decode.c \
+  $nxe_jwx_dir/src/nxe_jwx_jwks.c \
+  $nxe_jwx_dir/src/nxe_jwx_jws.c \
+  $nxe_jwx_dir/src/nxe_jwx_claims.c \
+"
+nxe_jwx_module_incs="\
+  $nxe_json_module_incs \
+  $nxe_jwx_dir/src \
+"
+nxe_jwx_module_libs="-lcrypto"
