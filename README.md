@@ -37,6 +37,26 @@ The library does **not** validate registered claims (`iss` / `aud` /
 `exp` / `iat` / `nbf` / `jti`); each upstream module enforces its own
 policy.
 
+## Verification policy
+
+`nxe_jwx_jws_verify` is fail-closed by design:
+
+- `none` is always rejected, regardless of build flags.
+- An empty signature is rejected before any key lookup.
+- `kid` is honored strictly.  If the token carries a `kid`, only
+  matching keys are tried; verification never falls through to keys
+  with a different `kid`, even when `kty` / `alg` would otherwise be
+  compatible.  When no key matches the `kid`, the second pass is
+  restricted to keys that have no `kid` of their own.
+- A JWK that declares `alg` is pinned to that algorithm — if the
+  token's `alg` does not match, the key is skipped.  This prevents
+  key-confusion across algorithm families.
+- JWKS entries with `use="enc"` are dropped at parse time so that
+  encryption keys cannot be used for signature verification.
+- All failures (no usable key, signature mismatch, `alg` mismatch,
+  `kid` miss, ...) collapse to `NGX_DECLINED`; callers cannot tell
+  which check rejected the token, denying an oracle to attackers.
+
 ## Integration
 
 In the consumer module's `config`, source `nxe-json` first, then
@@ -75,9 +95,9 @@ so they appear in the link line exactly once.
 
 | Library  | Required version | Notes |
 |----------|------------------|-------|
-| nxe-json | >= 0.1.0         | Provided by the parent module as a sibling submodule |
+| nxe-json | >= 0.3.0         | Provided by the parent module as a sibling submodule; the object iteration API (`nxe_json_object_size` / `nxe_json_object_iter*`) used by the multi-kid keyval parser landed in 0.3.0 |
 | OpenSSL  | >= 1.1.1         | Both 1.1.x and 3.0+ are supported |
-| jansson  | >= 2.13          | Transitive via nxe-json |
+| jansson  | >= 2.14          | Transitive via nxe-json (`json_object_iter_key_len` requires 2.14) |
 
 ## Building and testing
 
@@ -86,7 +106,7 @@ nginx module.  The unit test suite uses `tests/ngx_compat/` —
 malloc-backed stubs of the nginx core types — so no nginx source tree
 is required.  It does, however, need the `nxe-json` sources at
 `tests/vendor/nxe-json`, which come from a test-only submodule pinned
-to the supported minimum version (v0.2.0).  Initialise the submodule
+to the supported minimum version (v0.3.0).  Initialise the submodule
 once after cloning:
 
 ```sh
