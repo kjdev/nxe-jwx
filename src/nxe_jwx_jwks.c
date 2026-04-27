@@ -672,12 +672,28 @@ nxe_jwx_parse_one_key(struct nxe_jwx_key_s *k, nxe_json_t *jwk,
     ngx_pool_t *pool, ngx_log_t *log)
 {
     ngx_str_t kty;
+    ngx_str_t use;
 
     ngx_memzero(k, sizeof(*k));
 
     if (nxe_jwx_string_field(jwk, "kty", &kty) != NGX_OK) {
         ngx_log_error(NGX_LOG_WARN, log, 0,
                       "nxe_jwx: jwk missing 'kty'");
+        return NGX_DECLINED;
+    }
+
+    /*
+     * RFC 7517 "use" parameter.  Encryption-only keys must not be
+     * used for signature verification.  When the field is absent we
+     * treat the key as suitable for either purpose, which matches
+     * the spec's "no constraint" reading.
+     */
+    if (nxe_jwx_string_field(jwk, "use", &use) == NGX_OK
+        && use.len == 3
+        && ngx_strncmp(use.data, "enc", 3) == 0)
+    {
+        ngx_log_error(NGX_LOG_INFO, log, 0,
+                      "nxe_jwx: skipping JWK with use=\"enc\"");
         return NGX_DECLINED;
     }
 

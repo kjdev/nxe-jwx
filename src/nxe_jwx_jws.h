@@ -35,14 +35,18 @@
  *   - If the token names a "kid" and the keyset contains at least
  *     one key with the same kid, ONLY those keys are tried.  A
  *     signature failure on a kid-matched key falls through to
- *     NGX_DECLINED rather than re-trying other keys.  This prevents
- *     key-confusion regressions where a token intended for kid A
- *     is accepted by another compatible kid B sitting in the same
- *     JWKS.
+ *     NGX_DECLINED rather than re-trying other keys.
  *   - If the token names a kid that is absent from the keyset, the
- *     verifier falls back to trying every key whose kty/alg is
- *     compatible (e.g. for keysets without explicit kid labelling).
- *   - If the token carries no kid, every compatible key is tried.
+ *     verifier falls back to trying only the keyset's kid-less keys.
+ *     Other kid-labelled keys are skipped: a token claiming kid A
+ *     is never validated by a key that explicitly identifies as
+ *     kid B, which would otherwise enable key-confusion attacks
+ *     against operators who label their keys.
+ *   - If the token carries no kid, every key whose kty/alg is
+ *     compatible is tried.
+ *   - When the JWK supplies an "alg" parameter, the token's alg
+ *     must match it byte-for-byte; otherwise the key is skipped
+ *     even if the underlying kty / curve is compatible.
  *   - The first key that produces a valid signature wins.
  *
  * Return value:

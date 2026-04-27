@@ -331,15 +331,32 @@ nxe_jwx_hmac_verify(const ngx_str_t *secret, const char *digest_name,
 
 /*
  * Decide whether `key` is structurally compatible with `alg`.
- * "Compatible" here means: the key type / curve will not cause
- * EVP_DigestVerify to error out for reasons unrelated to the
- * signature itself.
+ * "Compatible" here means:
+ *   1. The key type / curve will not cause EVP_DigestVerify to error
+ *      out for reasons unrelated to the signature itself, AND
+ *   2. If the JWK pinned itself to a specific algorithm via the
+ *      "alg" parameter, the token's alg matches it byte-for-byte.
+ *      A key whose JWK declared alg=RS384 is not used to verify an
+ *      RS256 token even though both share kty=RSA: operators that
+ *      take the trouble to label keys with an alg expect it to be
+ *      enforced.
  */
 static ngx_flag_t
 nxe_jwx_key_compatible(const struct nxe_jwx_key_s *k,
     const nxe_jwx_alg_t *alg)
 {
     int pkey_id;
+    size_t alg_name_len;
+
+    /* Strict alg pinning when the JWK supplies one. */
+    if (k->alg.len > 0) {
+        alg_name_len = ngx_strlen(alg->name);
+        if (k->alg.len != alg_name_len
+            || ngx_strncmp(k->alg.data, alg->name, alg_name_len) != 0)
+        {
+            return 0;
+        }
+    }
 
     switch (alg->family) {
     case NXE_JWX_ALG_FAMILY_RSA:
@@ -442,6 +459,8 @@ nxe_jwx_jws_verify(const nxe_jwx_token_t *token, const nxe_jwx_jwks_t *jwks,
     ngx_log_t *log;
     ngx_uint_t i, n;
     ngx_flag_t any_internal_error = 0;
+    ngx_flag_t has_kid;
+    ngx_flag_t kid_matched_any = 0;
 
     if (token == NULL || jwks == NULL || pool == NULL) {
         return NGX_ERROR;
@@ -490,6 +509,7 @@ nxe_jwx_jws_verify(const nxe_jwx_token_t *token, const nxe_jwx_jwks_t *jwks,
     }
 
     kid = nxe_jwx_token_kid(token);
+    has_kid = (kid != NULL && kid->len > 0);
     n = nxe_jwx_jwks_size_internal(jwks);
 
     /*
@@ -506,11 +526,10 @@ nxe_jwx_jws_verify(const nxe_jwx_token_t *token, const nxe_jwx_jwks_t *jwks,
      * to pass 2 so kid-less or differently-labelled keys still get
      * a chance).
      */
-    ngx_flag_t kid_matched_any = 0;
-
-    if (kid != NULL && kid->len > 0) {
+    if (has_kid) {
         for (i = 0; i < n; i++) {
             struct nxe_jwx_key_s *k = nxe_jwx_jwks_key_at(jwks, i);
+            int rc;
 
             if (k == NULL || k->kid.len == 0) {
                 continue;
@@ -519,8 +538,8 @@ nxe_jwx_jws_verify(const nxe_jwx_token_t *token, const nxe_jwx_jwks_t *jwks,
                 continue;
             }
             kid_matched_any = 1;
-            int rc = nxe_jwx_verify_with_key(k, alg, signing_input,
-                                             signature, pool);
+            rc = nxe_jwx_verify_with_key(k, alg, signing_input,
+                                         signature, pool);
             if (rc == 1) {
                 return NGX_OK;
             }
@@ -531,18 +550,34 @@ nxe_jwx_jws_verify(const nxe_jwx_token_t *token, const nxe_jwx_jwks_t *jwks,
     }
 
     /*
-     * Pass 2: walk all compatible keys.  Skipped when pass 1 already
-     * tried at least one kid-matched key (kid-strict policy).
+     * Pass 2.  Eligibility depends on whether the token names a kid:
+     *
+     *   - Token has a kid AND pass 1 matched at least one key:
+     *     pass 2 is skipped entirely (kid-strict).
+     *
+     *   - Token has a kid AND pass 1 matched nothing: only kid-less
+     *     keys are eligible.  This preserves the legitimate "JWKS
+     *     contains some unlabeled keys" use case while denying
+     *     other-kid keys, which would otherwise admit key-confusion
+     *     attacks ("token claims kid X, but kid Y in the JWKS just
+     *     happens to verify").
+     *
+     *   - Token has no kid: all compatible keys are tried.  There
+     *     is no kid to confuse in this branch.
      */
-    if (!kid_matched_any) {
+    if (!(has_kid && kid_matched_any)) {
         for (i = 0; i < n; i++) {
             struct nxe_jwx_key_s *k = nxe_jwx_jwks_key_at(jwks, i);
+            int rc;
 
             if (k == NULL) {
                 continue;
             }
-            int rc = nxe_jwx_verify_with_key(k, alg, signing_input,
-                                             signature, pool);
+            if (has_kid && k->kid.len > 0) {
+                continue;
+            }
+            rc = nxe_jwx_verify_with_key(k, alg, signing_input,
+                                         signature, pool);
             if (rc == 1) {
                 return NGX_OK;
             }
