@@ -728,6 +728,48 @@ TEST(jwks_rsa_modulus_too_small){
     return 0;
 }
 
+TEST(jwks_rsa_modulus_too_large){
+    /*
+     * Synthesize an RSA JWK whose modulus has BN_num_bits ==
+     * NXE_JWX_MAX_RSA_BITS + 1.  Generating a real RSA key of that
+     * size at test time would be prohibitively slow, so we hand-craft
+     * the JWK with a synthetic n value of 0x01 followed by zero bytes
+     * and the standard 65537 public exponent.
+     */
+    size_t n_len = (NXE_JWX_MAX_RSA_BITS / 8) + 1;
+    u_char *n_buf;
+    static const u_char e_bytes[] = { 0x01, 0x00, 0x01 };
+    ngx_str_t n_b64, e_b64;
+    u_char *p;
+    static const char head[] = "{\"keys\":[{\"kty\":\"RSA\",\"n\":\"";
+    static const char mid[]  = "\",\"e\":\"";
+    static const char tail[] = "\"}]}";
+    ngx_str_t doc;
+
+    n_buf = ngx_pcalloc(pool, n_len);
+    ASSERT(n_buf != NULL);
+    n_buf[0] = 0x01;
+    n_b64 = test_b64url(n_buf, n_len, pool);
+    ASSERT(n_b64.len > 0);
+    e_b64 = test_b64url(e_bytes, sizeof(e_bytes), pool);
+    ASSERT(e_b64.len > 0);
+
+    doc.len = sizeof(head) - 1 + n_b64.len + sizeof(mid) - 1
+              + e_b64.len + sizeof(tail) - 1;
+    doc.data = ngx_pnalloc(pool, doc.len);
+    ASSERT(doc.data != NULL);
+    p = doc.data;
+    memcpy(p, head, sizeof(head) - 1); p += sizeof(head) - 1;
+    memcpy(p, n_b64.data, n_b64.len); p += n_b64.len;
+    memcpy(p, mid, sizeof(mid) - 1); p += sizeof(mid) - 1;
+    memcpy(p, e_b64.data, e_b64.len); p += e_b64.len;
+    memcpy(p, tail, sizeof(tail) - 1);
+
+    /* Modulus exceeds NXE_JWX_MAX_RSA_BITS -> rejected. */
+    ASSERT(nxe_jwx_jwks_parse(&doc, pool) == NULL);
+    return 0;
+}
+
 TEST(jwks_rsa_missing_n){
     ngx_str_t input = ngx_string(
         "{\"keys\":[{\"kty\":\"RSA\",\"e\":\"AQAB\"}]}");
@@ -1085,6 +1127,90 @@ TEST(jwks_keyval_ec_pem_verifies){
 TEST(jwks_keyval_empty_object){
     ngx_str_t doc = ngx_string("{}");
     ASSERT(nxe_jwx_jwks_parse_keyval(&doc, pool) == NULL);
+    return 0;
+}
+
+
+TEST(jwks_keyval_empty_kid_skipped){
+    /*
+     * A keyval document with an "" kid alongside a real kid should
+     * surface only the real kid; the empty-kid entry is dropped with
+     * a warning so it does not silently become a kid-less fallback
+     * candidate at verification time.
+     */
+    EVP_PKEY *pkey;
+    ngx_str_t pem, doc;
+    nxe_jwx_jwks_t *jwks;
+    ngx_str_t alpha = ngx_string("alpha");
+    static const char head[] = "{\"\":\"";
+    static const char mid[]  = "\",\"alpha\":\"";
+    static const char tail[] = "\"}";
+    u_char *p;
+    size_t escaped = 0, i;
+
+    pkey = test_gen_rsa(2048);
+    ASSERT(pkey != NULL);
+    pem = test_pem_pubkey(pkey, pool);
+    ASSERT(pem.len > 0);
+
+    for (i = 0; i < pem.len; i++) escaped += (pem.data[i] == '\n') ? 2 : 1;
+    doc.len = sizeof(head) - 1 + escaped + sizeof(mid) - 1
+              + escaped + sizeof(tail) - 1;
+    doc.data = ngx_pnalloc(pool, doc.len);
+    ASSERT(doc.data != NULL);
+
+    p = doc.data;
+    memcpy(p, head, sizeof(head) - 1); p += sizeof(head) - 1;
+    for (i = 0; i < pem.len; i++) {
+        if (pem.data[i] == '\n') { *p++ = '\\'; *p++ = 'n'; }
+        else                      { *p++ = pem.data[i]; }
+    }
+    memcpy(p, mid, sizeof(mid) - 1); p += sizeof(mid) - 1;
+    for (i = 0; i < pem.len; i++) {
+        if (pem.data[i] == '\n') { *p++ = '\\'; *p++ = 'n'; }
+        else                      { *p++ = pem.data[i]; }
+    }
+    memcpy(p, tail, sizeof(tail) - 1);
+
+    jwks = nxe_jwx_jwks_parse_keyval(&doc, pool);
+    ASSERT(jwks != NULL);
+    ASSERT_EQ_INT(nxe_jwx_jwks_count(jwks), 1);
+    ASSERT_EQ_INT(nxe_jwx_jwks_has_kid(jwks, &alpha), 1);
+
+    EVP_PKEY_free(pkey);
+    return 0;
+}
+
+
+TEST(jwks_keyval_empty_kid_only_rejected){
+    /* All entries are empty-kid -> zero usable keys -> NULL. */
+    EVP_PKEY *pkey;
+    ngx_str_t pem, doc;
+    static const char head[] = "{\"\":\"";
+    static const char tail[] = "\"}";
+    u_char *p;
+    size_t escaped = 0, i;
+
+    pkey = test_gen_rsa(2048);
+    ASSERT(pkey != NULL);
+    pem = test_pem_pubkey(pkey, pool);
+    ASSERT(pem.len > 0);
+
+    for (i = 0; i < pem.len; i++) escaped += (pem.data[i] == '\n') ? 2 : 1;
+    doc.len = sizeof(head) - 1 + escaped + sizeof(tail) - 1;
+    doc.data = ngx_pnalloc(pool, doc.len);
+    ASSERT(doc.data != NULL);
+
+    p = doc.data;
+    memcpy(p, head, sizeof(head) - 1); p += sizeof(head) - 1;
+    for (i = 0; i < pem.len; i++) {
+        if (pem.data[i] == '\n') { *p++ = '\\'; *p++ = 'n'; }
+        else                      { *p++ = pem.data[i]; }
+    }
+    memcpy(p, tail, sizeof(tail) - 1);
+
+    ASSERT(nxe_jwx_jwks_parse_keyval(&doc, pool) == NULL);
+    EVP_PKEY_free(pkey);
     return 0;
 }
 
@@ -2024,6 +2150,7 @@ main(void)
     RUN(jwks_too_many_keys);
     RUN(jwks_rsa_ok);
     RUN(jwks_rsa_modulus_too_small);
+    RUN(jwks_rsa_modulus_too_large);
     RUN(jwks_rsa_missing_n);
     RUN(jwks_rsa_missing_e);
     RUN(jwks_ec_p256_ok);
@@ -2046,6 +2173,8 @@ main(void)
     RUN(jwks_keyval_pem_ok);
     RUN(jwks_keyval_ec_pem_verifies);
     RUN(jwks_keyval_empty_object);
+    RUN(jwks_keyval_empty_kid_skipped);
+    RUN(jwks_keyval_empty_kid_only_rejected);
     RUN(jwks_keyval_multi_kid_pem);
 #if (NXE_JWX_HAVE_HMAC)
     RUN(jwks_keyval_hmac_secret_ok);
