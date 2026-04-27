@@ -1057,6 +1057,29 @@ nxe_jwx_jwks_count(const nxe_jwx_jwks_t *jwks)
 }
 
 
+ngx_flag_t
+nxe_jwx_jwks_has_kid(const nxe_jwx_jwks_t *jwks, const ngx_str_t *kid)
+{
+    ngx_uint_t i;
+
+    if (jwks == NULL || kid == NULL || kid->len == 0 || kid->data == NULL) {
+        return 0;
+    }
+
+    for (i = 0; i < jwks->nkeys; i++) {
+        const struct nxe_jwx_key_s *k = &jwks->keys[i];
+
+        if (k->kid.len == kid->len
+            && k->kid.len > 0
+            && ngx_strncmp(k->kid.data, kid->data, kid->len) == 0)
+        {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+
 /* Internal accessors used by nxe_jwx_jws.c. */
 
 ngx_uint_t

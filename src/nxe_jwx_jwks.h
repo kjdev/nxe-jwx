@@ -68,4 +68,18 @@ nxe_jwx_jwks_t *nxe_jwx_jwks_parse_keyval(const ngx_str_t *keyval_json,
 ngx_uint_t nxe_jwx_jwks_count(const nxe_jwx_jwks_t *jwks);
 
 
+/*
+ * Report whether the keyset contains at least one key whose kid
+ * matches the supplied identifier.  Returns 1 on match, 0 otherwise.
+ *
+ * Pairs with nxe_jwx_jws_verify() for callers that want to log a
+ * specific "kid declared but signature failed" message: under the
+ * kid-strict policy, the verifier returns NGX_DECLINED in that case,
+ * and the caller can use this helper to disambiguate from "no key
+ * for this kid".  A NULL or zero-length kid returns 0.
+ */
+ngx_flag_t nxe_jwx_jwks_has_kid(const nxe_jwx_jwks_t *jwks,
+    const ngx_str_t *kid);
+
+
 #endif /* _NXE_JWX_JWKS_H_INCLUDED_ */
