@@ -74,13 +74,20 @@ nxe_jwx_token_cleanup(void *data)
 
 /*
  * Locate the two '.' separators of the compact serialization.
- * Rejects tokens that have fewer or more than two dots, or any empty
- * segment.  On success the segments span:
+ * Rejects tokens that have fewer or more than two dots, or whose
+ * header/payload segments are empty.  An empty signature segment is
+ * accepted: this allows callers that only consume claims (e.g.
+ * decode-only directives) to handle alg=none / unsigned tokens
+ * coming from a trusted upstream.  Such tokens still fail
+ * nxe_jwx_jws_verify(), which rejects alg=none unconditionally and
+ * cannot validate a zero-byte signature against any key.
  *
- *   header   = [data,           dot1)
- *   payload  = [dot1+1,         dot2)
- *   signing  = [data,           dot2)        -- header || '.' || payload
- *   signature = [dot2+1,        end)
+ * Segment layout:
+ *
+ *   header    = [data,           dot1)
+ *   payload   = [dot1+1,         dot2)
+ *   signing   = [data,           dot2)       -- header || '.' || payload
+ *   signature = [dot2+1,         end)        -- may be zero-length
  */
 static ngx_int_t
 nxe_jwx_split_segments(const ngx_str_t *token, ngx_str_t *header,
@@ -124,9 +131,9 @@ nxe_jwx_split_segments(const ngx_str_t *token, ngx_str_t *header,
     signature->data = dot2 + 1;
     signature->len = (size_t) (end - dot2 - 1);
 
-    if (header->len == 0 || payload->len == 0 || signature->len == 0) {
+    if (header->len == 0 || payload->len == 0) {
         ngx_log_error(NGX_LOG_ERR, log, 0,
-                      "nxe_jwx: token has an empty segment");
+                      "nxe_jwx: token has an empty header or payload segment");
         return NGX_ERROR;
     }
 
@@ -311,9 +318,15 @@ nxe_jwx_decode(const ngx_str_t *token_str, ngx_pool_t *pool)
         return NULL;
     }
 
-    /* Signature. */
-    if (nxe_jwx_decode_b64url(&token->signature, &signature_b64, pool)
-        != NGX_OK)
+    /* Signature.  An empty signature segment is preserved as a zero-
+     * length buffer so the token round-trips through decode-only
+     * directives; nxe_jwx_jws_verify() will refuse to validate it. */
+    if (signature_b64.len == 0) {
+        token->signature.data = NULL;
+        token->signature.len = 0;
+
+    } else if (nxe_jwx_decode_b64url(&token->signature, &signature_b64, pool)
+               != NGX_OK)
     {
         ngx_log_error(NGX_LOG_ERR, log, 0,
                       "nxe_jwx: invalid base64url in signature");

@@ -19,7 +19,11 @@
  * Decode a JWT (header.payload.signature) into an opaque token object.
  *
  *   - Splits the compact serialization on '.'; rejects any token
- *     that does not have exactly three non-empty segments.
+ *     that does not have exactly three segments.  The header and
+ *     payload segments must be non-empty; the signature segment is
+ *     allowed to be empty (e.g. detached or unsigned tokens reach
+ *     nxe_jwx_jws_verify(), where they are rejected together with
+ *     any other alg/key mismatch).
  *   - Base64url-decodes header and payload using nginx core
  *     (ngx_decode_base64url).
  *   - Parses both decoded segments as JSON via

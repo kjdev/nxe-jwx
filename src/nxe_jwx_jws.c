@@ -479,6 +479,16 @@ nxe_jwx_jws_verify(const nxe_jwx_token_t *token, const nxe_jwx_jwks_t *jwks,
         return NGX_ERROR;
     }
 
+    /* A zero-length signature can occur for tokens that the decoder
+     * accepted (see nxe_jwx_split_segments) but which carry no actual
+     * signature material.  No key can ever validate such a token, so
+     * reject before walking the keyset. */
+    if (signature->len == 0) {
+        ngx_log_error(NGX_LOG_ERR, log, 0,
+                      "nxe_jwx: token has no signature material");
+        return NGX_DECLINED;
+    }
+
     kid = nxe_jwx_token_kid(token);
     n = nxe_jwx_jwks_size_internal(jwks);
 
