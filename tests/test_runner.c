@@ -1651,6 +1651,38 @@ TEST(jws_kid_no_match_falls_back){
     return 0;
 }
 
+TEST(jwks_has_kid_basic){
+    /* Helper that lets callers tell "kid present but signature failed"
+     * apart from "kid not in keyset" when nxe_jwx_jws_verify returns
+     * NGX_DECLINED.  Required by nginx-auth-jwt's audit-log message
+     * that names the kid only when it was actually attempted. */
+    EVP_PKEY *p1, *p2;
+    ngx_str_t parts[2], doc;
+    nxe_jwx_jwks_t *jwks;
+    ngx_str_t k_yes = ngx_string("present");
+    ngx_str_t k_no  = ngx_string("absent");
+    ngx_str_t k_empty = ngx_null_string;
+
+    p1 = test_gen_rsa(2048); ASSERT(p1 != NULL);
+    p2 = test_gen_rsa(2048); ASSERT(p2 != NULL);
+    parts[0] = test_jwk_rsa(p1, "present", "RS256", pool);
+    parts[1] = test_jwk_rsa(p2, NULL,      "RS256", pool);
+    doc = test_jwks_build(parts, 2, pool);
+    jwks = nxe_jwx_jwks_parse(&doc, pool);
+    ASSERT(jwks != NULL);
+
+    ASSERT_EQ_INT(nxe_jwx_jwks_has_kid(jwks, &k_yes), 1);
+    ASSERT_EQ_INT(nxe_jwx_jwks_has_kid(jwks, &k_no),  0);
+    ASSERT_EQ_INT(nxe_jwx_jwks_has_kid(jwks, &k_empty), 0);
+    ASSERT_EQ_INT(nxe_jwx_jwks_has_kid(NULL,  &k_yes),  0);
+    ASSERT_EQ_INT(nxe_jwx_jwks_has_kid(jwks, NULL), 0);
+
+    EVP_PKEY_free(p1);
+    EVP_PKEY_free(p2);
+    return 0;
+}
+
+
 TEST(jws_kid_match_pins_to_that_key){
     /*
      * kid-strict policy: when the kid matches a key but its signature
@@ -1927,6 +1959,7 @@ main(void)
     RUN(jws_no_alg_rejected);
     RUN(jws_signature_tampered);
     RUN(jws_kid_no_match_falls_back);
+    RUN(jwks_has_kid_basic);
     RUN(jws_kid_match_pins_to_that_key);
     RUN(jws_kty_mismatch);
     RUN(jws_ec_curve_mismatch);
