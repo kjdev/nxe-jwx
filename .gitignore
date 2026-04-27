@@ -4,4 +4,3 @@
 /tests/*.gcno
 /tests/*.gcda
 /tests/*.gcov
-/tests/vendor/
