@@ -1057,15 +1057,100 @@ TEST(jwks_keyval_ec_pem_verifies){
 }
 
 
-TEST(jwks_keyval_no_k){
-    ngx_str_t doc = ngx_string("{\"foo\":\"bar\"}");
+TEST(jwks_keyval_empty_object){
+    ngx_str_t doc = ngx_string("{}");
     ASSERT(nxe_jwx_jwks_parse_keyval(&doc, pool) == NULL);
     return 0;
 }
 
-TEST(jwks_keyval_invalid_pem){
+
+#if (NXE_JWX_HAVE_HMAC)
+
+TEST(jwks_keyval_hmac_secret_ok){
+    /* Multi-kid with HMAC enabled: a non-PEM string value is taken as
+     * an opaque oct/HMAC secret.  The kid is preserved verbatim so the
+     * verifier can match by kid. */
+    ngx_str_t doc = ngx_string("{\"test1\":\"test1.secret\"}");
+    nxe_jwx_jwks_t *jwks;
+
+    jwks = nxe_jwx_jwks_parse_keyval(&doc, pool);
+    ASSERT(jwks != NULL);
+    ASSERT_EQ_INT(nxe_jwx_jwks_count(jwks), 1);
+    return 0;
+}
+
+
+TEST(jwks_keyval_multi_kid_hmac){
+    /* Two HMAC secrets in one document; both must be present. */
+    ngx_str_t doc = ngx_string(
+        "{\"k1\":\"alpha-secret\",\"k2\":\"beta-secret\"}");
+    nxe_jwx_jwks_t *jwks;
+
+    jwks = nxe_jwx_jwks_parse_keyval(&doc, pool);
+    ASSERT(jwks != NULL);
+    ASSERT_EQ_INT(nxe_jwx_jwks_count(jwks), 2);
+    return 0;
+}
+
+#else
+
+TEST(jwks_keyval_invalid_pem_without_hmac){
+    /* Without HMAC support, a non-PEM string can't be classified as
+     * any supported key, so the document yields zero usable keys. */
     ngx_str_t doc = ngx_string("{\"k\":\"not a pem\"}");
     ASSERT(nxe_jwx_jwks_parse_keyval(&doc, pool) == NULL);
+    return 0;
+}
+
+#endif
+
+
+TEST(jwks_keyval_multi_kid_pem){
+    /* Two PEM RSA public keys on different kids. */
+    EVP_PKEY *p1, *p2;
+    ngx_str_t pem1, pem2, doc;
+    nxe_jwx_jwks_t *jwks;
+    static const char head[] = "{\"alpha\":\"";
+    static const char mid[]  = "\",\"beta\":\"";
+    static const char tail[] = "\"}";
+    u_char *p;
+    size_t e1 = 0, e2 = 0, i;
+
+    p1 = test_gen_rsa(2048);
+    ASSERT(p1 != NULL);
+    p2 = test_gen_rsa(2048);
+    ASSERT(p2 != NULL);
+    pem1 = test_pem_pubkey(p1, pool);
+    pem2 = test_pem_pubkey(p2, pool);
+    ASSERT(pem1.len > 0);
+    ASSERT(pem2.len > 0);
+
+    for (i = 0; i < pem1.len; i++) e1 += (pem1.data[i] == '\n') ? 2 : 1;
+    for (i = 0; i < pem2.len; i++) e2 += (pem2.data[i] == '\n') ? 2 : 1;
+    doc.len = sizeof(head) - 1 + e1 + sizeof(mid) - 1 + e2
+              + sizeof(tail) - 1;
+    doc.data = ngx_pnalloc(pool, doc.len);
+    ASSERT(doc.data != NULL);
+
+    p = doc.data;
+    memcpy(p, head, sizeof(head) - 1); p += sizeof(head) - 1;
+    for (i = 0; i < pem1.len; i++) {
+        if (pem1.data[i] == '\n') { *p++ = '\\'; *p++ = 'n'; }
+        else                      { *p++ = pem1.data[i]; }
+    }
+    memcpy(p, mid, sizeof(mid) - 1); p += sizeof(mid) - 1;
+    for (i = 0; i < pem2.len; i++) {
+        if (pem2.data[i] == '\n') { *p++ = '\\'; *p++ = 'n'; }
+        else                      { *p++ = pem2.data[i]; }
+    }
+    memcpy(p, tail, sizeof(tail) - 1);
+
+    jwks = nxe_jwx_jwks_parse_keyval(&doc, pool);
+    ASSERT(jwks != NULL);
+    ASSERT_EQ_INT(nxe_jwx_jwks_count(jwks), 2);
+
+    EVP_PKEY_free(p1);
+    EVP_PKEY_free(p2);
     return 0;
 }
 
@@ -1707,8 +1792,14 @@ main(void)
     /* jwks keyval */
     RUN(jwks_keyval_pem_ok);
     RUN(jwks_keyval_ec_pem_verifies);
-    RUN(jwks_keyval_no_k);
-    RUN(jwks_keyval_invalid_pem);
+    RUN(jwks_keyval_empty_object);
+    RUN(jwks_keyval_multi_kid_pem);
+#if (NXE_JWX_HAVE_HMAC)
+    RUN(jwks_keyval_hmac_secret_ok);
+    RUN(jwks_keyval_multi_kid_hmac);
+#else
+    RUN(jwks_keyval_invalid_pem_without_hmac);
+#endif
     RUN(jwks_keyval_root_not_object);
     RUN(jwks_keyval_invalid_json);
     RUN(jwks_keyval_null_args);
