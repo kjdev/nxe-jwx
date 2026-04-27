@@ -505,19 +505,37 @@ nxe_jwx_parse_rsa(struct nxe_jwx_key_s *k, nxe_json_t *jwk,
         return NGX_DECLINED;
     }
 
-    if (n_bytes.len < (NXE_JWX_MIN_RSA_BITS / 8)) {
-        ngx_log_error(NGX_LOG_ERR, log, 0,
-                      "nxe_jwx: RSA modulus shorter than %ui bits",
-                      (ngx_uint_t) NXE_JWX_MIN_RSA_BITS);
-        return NGX_DECLINED;
-    }
-
     n_bn = BN_bin2bn(n_bytes.data, (int) n_bytes.len, NULL);
     e_bn = BN_bin2bn(e_bytes.data, (int) e_bytes.len, NULL);
     if (n_bn == NULL || e_bn == NULL) {
         BN_free(n_bn);
         BN_free(e_bn);
         return NGX_ERROR;
+    }
+
+    /*
+     * Bound the modulus length explicitly using BN_num_bits so the
+     * check is independent of leading-zero stripping in the JWK
+     * encoding.  A modulus below NXE_JWX_MIN_RSA_BITS is rejected as
+     * insecure; one above NXE_JWX_MAX_RSA_BITS is rejected to bound
+     * the cost of subsequent EVP_DigestVerify calls.
+     */
+    {
+        int n_bits = BN_num_bits(n_bn);
+
+        if (n_bits < NXE_JWX_MIN_RSA_BITS
+            || n_bits > NXE_JWX_MAX_RSA_BITS)
+        {
+            ngx_log_error(NGX_LOG_ERR, log, 0,
+                          "nxe_jwx: RSA modulus %d bits is outside "
+                          "[%ui, %ui]",
+                          n_bits,
+                          (ngx_uint_t) NXE_JWX_MIN_RSA_BITS,
+                          (ngx_uint_t) NXE_JWX_MAX_RSA_BITS);
+            BN_free(n_bn);
+            BN_free(e_bn);
+            return NGX_DECLINED;
+        }
     }
 
     /*
@@ -984,6 +1002,18 @@ nxe_jwx_jwks_parse_keyval(const ngx_str_t *keyval_json, ngx_pool_t *pool)
         }
 
         if (nxe_json_object_iter_key(it, &kid) != NGX_OK) {
+            continue;
+        }
+        if (kid.len == 0) {
+            /*
+             * RFC 7517 leaves "kid" optional, but a JSON object key
+             * of "" is almost certainly a configuration mistake: the
+             * resulting key would silently become a kid-less fallback
+             * candidate at verification time.  Reject the entry so
+             * operators notice the typo.
+             */
+            ngx_log_error(NGX_LOG_WARN, log, 0,
+                          "nxe_jwx: keyval has an empty kid; skipped");
             continue;
         }
         val_node = nxe_json_object_iter_value(it);

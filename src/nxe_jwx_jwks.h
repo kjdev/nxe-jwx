@@ -25,7 +25,7 @@
  * Constraints (fail-closed; document is rejected when violated):
  *   - JWKS document size <= NXE_JWX_MAX_JWKS_SIZE
  *   - Number of keys <= NXE_JWX_MAX_JWKS_KEYS
- *   - RSA modulus >= NXE_JWX_MIN_RSA_BITS
+ *   - NXE_JWX_MIN_RSA_BITS <= RSA modulus <= NXE_JWX_MAX_RSA_BITS
  *
  * Behavior:
  *   - Unknown / unsupported keys are skipped with a warning; parsing

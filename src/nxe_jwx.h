@@ -52,6 +52,7 @@
 #define NXE_JWX_MAX_JWKS_SIZE       262144      /* 256 KiB JWKS document */
 #define NXE_JWX_MAX_JWKS_KEYS       64
 #define NXE_JWX_MIN_RSA_BITS        2048
+#define NXE_JWX_MAX_RSA_BITS        16384       /* upper bound to bound DoS */
 
 
 /* === Opaque types === */
