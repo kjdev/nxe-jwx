@@ -1683,6 +1683,126 @@ TEST(jwks_has_kid_basic){
 }
 
 
+TEST(jws_kid_mismatch_with_other_kid_only_rejected){
+    /*
+     * Tighter kid-strict: when the token names a kid and the JWKS
+     * contains other kid-labelled keys but NO kid-less key, the
+     * verifier must refuse rather than fall through to the
+     * other-kid keys.  This blocks key-confusion attacks where a
+     * caller asserts kid="prod" but the JWKS just happens to
+     * contain another kid that successfully validates the
+     * signature.
+     */
+    EVP_PKEY *pkey;
+    ngx_str_t jwk, doc, signing, jwt;
+    nxe_jwx_jwks_t *jwks;
+    nxe_jwx_token_t *t;
+    u_char *sig;
+    size_t sig_len;
+
+    pkey = test_gen_rsa(2048); ASSERT(pkey != NULL);
+    jwk = test_jwk_rsa(pkey, "wrong-kid", "RS256", pool);
+    doc = test_jwks_build(&jwk, 1, pool);
+    jwks = nxe_jwx_jwks_parse(&doc, pool);
+    ASSERT(jwks != NULL);
+
+    signing = test_signing_input(
+        "{\"alg\":\"RS256\",\"kid\":\"requested-kid\"}",
+        "{\"sub\":\"alice\"}", pool);
+    ASSERT_EQ_INT(test_sign(pkey, "SHA256", 0, 0,
+                            signing.data, signing.len,
+                            &sig, &sig_len, pool), NGX_OK);
+    jwt = test_jwt_build("{\"alg\":\"RS256\",\"kid\":\"requested-kid\"}",
+                         "{\"sub\":\"alice\"}", sig, sig_len, pool);
+    t = nxe_jwx_decode(&jwt, pool);
+    ASSERT(t != NULL);
+    ASSERT_EQ_INT(nxe_jwx_jws_verify(t, jwks, pool), NGX_DECLINED);
+
+    EVP_PKEY_free(pkey);
+    return 0;
+}
+
+
+TEST(jws_alg_pinned_in_jwk){
+    /*
+     * JWK declares alg=RS384 but the token claims alg=RS256.  Both
+     * are RSA and the underlying RSA key can sign either size; the
+     * JWK's pinned alg must still cause the verifier to skip it.
+     */
+    EVP_PKEY *pkey;
+    ngx_str_t jwk, doc, signing, jwt;
+    nxe_jwx_jwks_t *jwks;
+    nxe_jwx_token_t *t;
+    u_char *sig;
+    size_t sig_len;
+
+    pkey = test_gen_rsa(2048); ASSERT(pkey != NULL);
+    jwk = test_jwk_rsa(pkey, "k1", "RS384", pool);
+    doc = test_jwks_build(&jwk, 1, pool);
+    jwks = nxe_jwx_jwks_parse(&doc, pool);
+    ASSERT(jwks != NULL);
+
+    signing = test_signing_input(
+        "{\"alg\":\"RS256\",\"kid\":\"k1\"}",
+        "{\"sub\":\"alice\"}", pool);
+    ASSERT_EQ_INT(test_sign(pkey, "SHA256", 0, 0,
+                            signing.data, signing.len,
+                            &sig, &sig_len, pool), NGX_OK);
+    jwt = test_jwt_build("{\"alg\":\"RS256\",\"kid\":\"k1\"}",
+                         "{\"sub\":\"alice\"}", sig, sig_len, pool);
+    t = nxe_jwx_decode(&jwt, pool);
+    ASSERT(t != NULL);
+    ASSERT_EQ_INT(nxe_jwx_jws_verify(t, jwks, pool), NGX_DECLINED);
+
+    EVP_PKEY_free(pkey);
+    return 0;
+}
+
+
+TEST(jwks_use_enc_skipped){
+    /*
+     * JWK with use="enc" must not be picked up for signature
+     * verification.  Here the document has only one key (an RSA
+     * encryption key), so the parse must reject the document
+     * outright (zero usable signing keys).  The trick used to
+     * inject the "use" field is to take the JWK literal produced
+     * by test_jwk_rsa() and splice "use":"enc" in after the kty
+     * field; doing it this way avoids re-implementing n/e
+     * extraction in test code.
+     */
+    EVP_PKEY *pkey;
+    ngx_str_t jwk, jwk_enc, doc;
+    static const char marker[] = "{\"kty\":\"RSA\"";
+    static const char inject[] = "{\"kty\":\"RSA\",\"use\":\"enc\"";
+    u_char *p;
+
+    pkey = test_gen_rsa(2048); ASSERT(pkey != NULL);
+    jwk = test_jwk_rsa(pkey, "k1", "RS256", pool);
+    ASSERT(jwk.len > 0);
+    /* test_jwk_rsa always emits the kty field first, so the marker
+     * sits at offset 0. */
+    ASSERT(jwk.len >= sizeof(marker) - 1);
+    ASSERT(ngx_strncmp(jwk.data, marker, sizeof(marker) - 1) == 0);
+
+    jwk_enc.len = jwk.len + (sizeof(inject) - sizeof(marker));
+    jwk_enc.data = ngx_pnalloc(pool, jwk_enc.len);
+    ASSERT(jwk_enc.data != NULL);
+    p = jwk_enc.data;
+    ngx_memcpy(p, inject, sizeof(inject) - 1);
+    p += sizeof(inject) - 1;
+    ngx_memcpy(p, jwk.data + sizeof(marker) - 1,
+               jwk.len - (sizeof(marker) - 1));
+
+    doc = test_jwks_build(&jwk_enc, 1, pool);
+    ASSERT(doc.len > 0);
+
+    ASSERT(nxe_jwx_jwks_parse(&doc, pool) == NULL);
+
+    EVP_PKEY_free(pkey);
+    return 0;
+}
+
+
 TEST(jws_kid_match_pins_to_that_key){
     /*
      * kid-strict policy: when the kid matches a key but its signature
@@ -1960,6 +2080,9 @@ main(void)
     RUN(jws_signature_tampered);
     RUN(jws_kid_no_match_falls_back);
     RUN(jwks_has_kid_basic);
+    RUN(jws_kid_mismatch_with_other_kid_only_rejected);
+    RUN(jws_alg_pinned_in_jwk);
+    RUN(jwks_use_enc_skipped);
     RUN(jws_kid_match_pins_to_that_key);
     RUN(jws_kty_mismatch);
     RUN(jws_ec_curve_mismatch);
