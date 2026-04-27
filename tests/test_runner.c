@@ -1615,9 +1615,11 @@ TEST(jws_signature_tampered){
 
 TEST(jws_kid_no_match_falls_back){
     /*
-     * Two keys in the JWKS: one with kid="other" (matching alg), one
-     * kid-less (also matching alg).  Token has kid="ghost" -> pass 1
-     * finds nothing, pass 2 verifies against the kid-less key.
+     * kid-strict policy: when no key in the JWKS carries the token's
+     * kid at all, the verifier falls back to trying every compatible
+     * key.  Two keys here -- kid="other" and kid-less -- neither one
+     * matches the token's kid="ghost", so pass 2 runs and the
+     * kid-less key validates the signature.
      */
     EVP_PKEY *pkey;
     ngx_str_t parts[2], doc, signing, jwt;
@@ -1646,6 +1648,49 @@ TEST(jws_kid_no_match_falls_back){
     ASSERT_EQ_INT(nxe_jwx_jws_verify(t, jwks, pool), NGX_OK);
 
     EVP_PKEY_free(pkey);
+    return 0;
+}
+
+TEST(jws_kid_match_pins_to_that_key){
+    /*
+     * kid-strict policy: when the kid matches a key but its signature
+     * fails (here the token is signed with rsa_b but kid="a" maps to
+     * rsa_a), the verifier MUST NOT fall back to other compatible
+     * keys -- doing so would let an attacker who knows any key in
+     * the keyset forge tokens for any kid.  The kid-less rsa_b key
+     * could verify the signature on its own merits, but pass 1 has
+     * already pinned us to kid="a".
+     */
+    EVP_PKEY *rsa_a, *rsa_b;
+    ngx_str_t parts[2], doc, signing, jwt;
+    nxe_jwx_jwks_t *jwks;
+    nxe_jwx_token_t *t;
+    u_char *sig;
+    size_t sig_len;
+
+    rsa_a = test_gen_rsa(2048); ASSERT(rsa_a != NULL);
+    rsa_b = test_gen_rsa(2048); ASSERT(rsa_b != NULL);
+
+    parts[0] = test_jwk_rsa(rsa_a, "a", "RS256", pool);
+    parts[1] = test_jwk_rsa(rsa_b, NULL, "RS256", pool);
+    doc = test_jwks_build(parts, 2, pool);
+    jwks = nxe_jwx_jwks_parse(&doc, pool);
+    ASSERT(jwks != NULL);
+
+    signing = test_signing_input(
+        "{\"alg\":\"RS256\",\"kid\":\"a\"}",
+        "{\"sub\":\"alice\"}", pool);
+    ASSERT_EQ_INT(test_sign(rsa_b, "SHA256", 0, 0,
+                            signing.data, signing.len,
+                            &sig, &sig_len, pool), NGX_OK);
+    jwt = test_jwt_build("{\"alg\":\"RS256\",\"kid\":\"a\"}",
+                         "{\"sub\":\"alice\"}", sig, sig_len, pool);
+    t = nxe_jwx_decode(&jwt, pool);
+    ASSERT(t != NULL);
+    ASSERT_EQ_INT(nxe_jwx_jws_verify(t, jwks, pool), NGX_DECLINED);
+
+    EVP_PKEY_free(rsa_a);
+    EVP_PKEY_free(rsa_b);
     return 0;
 }
 
@@ -1882,6 +1927,7 @@ main(void)
     RUN(jws_no_alg_rejected);
     RUN(jws_signature_tampered);
     RUN(jws_kid_no_match_falls_back);
+    RUN(jws_kid_match_pins_to_that_key);
     RUN(jws_kty_mismatch);
     RUN(jws_ec_curve_mismatch);
     RUN(jws_es256_bad_sig_length);
