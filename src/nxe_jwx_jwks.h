@@ -48,11 +48,17 @@ nxe_jwx_jwks_t *nxe_jwx_jwks_parse(const ngx_str_t *jwks_json,
  *
  * Compatibility shim for nginx-auth-jwt's `auth_jwt_keyval` directive,
  * which lets operators load keys from a flat JSON map rather than a
- * proper JWKS document.  Each value can be:
- *   - PEM-encoded public key (RSA / EC / OKP)
- *   - Raw secret bytes (only when NXE_JWX_HAVE_HMAC is defined)
+ * proper JWKS document.  Each value is interpreted in this order:
+ *   1. PEM-encoded public key (RSA / EC / OKP).  The key type is
+ *      derived from the parsed EVP_PKEY.
+ *   2. With NXE_JWX_HAVE_HMAC, an opaque oct (HMAC) secret.  The bytes
+ *      are stored verbatim and cleansed via OPENSSL_cleanse at
+ *      cleanup; no base64url decoding is performed.
+ *   3. Otherwise the entry is skipped with a warning.
  *
- * Returns NULL on hard failure.  Same constraints as nxe_jwx_jwks_parse.
+ * Iteration order matches the JSON document's insertion order.  The
+ * same DoS limits as nxe_jwx_jwks_parse apply (size, key count).
+ * Returns NULL on hard failure or when no usable keys remain.
  */
 nxe_jwx_jwks_t *nxe_jwx_jwks_parse_keyval(const ngx_str_t *keyval_json,
     ngx_pool_t *pool);

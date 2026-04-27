@@ -887,23 +887,25 @@ nxe_jwx_jwks_parse_keyval(const ngx_str_t *keyval_json, ngx_pool_t *pool)
 {
     nxe_jwx_jwks_t *jwks;
     nxe_json_t *root;
+    nxe_json_iter_t *it;
     ngx_str_t input;
     ngx_log_t *log;
+    size_t nkeys;
 
-    /* nxe-json does not (currently) expose object iteration, so we
-     * implement keyval parsing here by delegating to nxe-json's
-     * object_get for each kid the caller declared.  But operators
-     * supply { "kid1": ..., "kid2": ... } as a JSON literal where
-     * the kids are NOT known ahead of time, so we keep the design
-     * symmetric with parse() above and require an explicit "keys"
-     * array nested form in the future.
+    /*
+     * Keyval document layout:  { "<kid>": "<value>", ... }
      *
-     * For now we provide a minimal v1 that accepts a single-key
-     * keyval payload {"kid": "<PEM>"} which is the dominant use
-     * case in nginx-auth-jwt's auth_jwt_keyval directive.  Multi-key
-     * support and (with NXE_JWX_HAVE_HMAC) raw secrets can be added
-     * once nxe-json grows an object iterator without breaking the
-     * public API.
+     * Each value is interpreted as follows, in order:
+     *   1. A PEM-encoded public key (RSA / EC / OKP).  Successful PEM
+     *      load determines the key type via the underlying EVP_PKEY.
+     *   2. With NXE_JWX_HAVE_HMAC, the raw symmetric secret for an
+     *      oct (HMAC) key.  The bytes are copied into the pool and
+     *      cleansed at cleanup time.
+     *   3. Otherwise the entry is skipped with a warning.
+     *
+     * The iteration is driven by nxe_json_object_iter*; the document
+     * size and key count are bounded by the same DoS limits used for
+     * proper JWKS documents.
      */
 
     if (pool == NULL || keyval_json == NULL || keyval_json->data == NULL) {
@@ -929,53 +931,120 @@ nxe_jwx_jwks_parse_keyval(const ngx_str_t *keyval_json, ngx_pool_t *pool)
         return NULL;
     }
 
-    /*
-     * Without nxe-json object iteration, expose only the
-     * single-key shortcut: {"k": "<PEM>"}.  Operators that need
-     * multi-key keyval should migrate to a JWKS document.
-     */
+    nkeys = nxe_json_object_size(root);
+    if (nkeys == 0) {
+        ngx_log_error(NGX_LOG_ERR, log, 0,
+                      "nxe_jwx: keyval document is empty");
+        nxe_json_free(root);
+        return NULL;
+    }
+    if (nkeys > NXE_JWX_MAX_JWKS_KEYS) {
+        ngx_log_error(NGX_LOG_ERR, log, 0,
+                      "nxe_jwx: keyval contains more than %ui keys",
+                      (ngx_uint_t) NXE_JWX_MAX_JWKS_KEYS);
+        nxe_json_free(root);
+        return NULL;
+    }
+
+    jwks = nxe_jwx_jwks_alloc(pool, (ngx_uint_t) nkeys);
+    if (jwks == NULL) {
+        nxe_json_free(root);
+        return NULL;
+    }
+
+    for (it = nxe_json_object_iter(root);
+         it != NULL;
+         it = nxe_json_object_iter_next(root, it))
     {
-        ngx_str_t pem;
+        ngx_str_t kid;
+        ngx_str_t val;
+        nxe_json_t *val_node;
+        struct nxe_jwx_key_s *k;
         EVP_PKEY *pkey;
         nxe_jwx_kty_t kty;
 
-        if (nxe_jwx_string_field(root, "k", &pem) != NGX_OK) {
-            ngx_log_error(NGX_LOG_ERR, log, 0,
-                          "nxe_jwx: keyval document does not expose a 'k' member;"
-                          " multi-kid keyval support is pending nxe-json iteration");
+        if (nxe_jwx_jwks_count(jwks) >= NXE_JWX_MAX_JWKS_KEYS) {
+            break;
+        }
+
+        if (nxe_json_object_iter_key(it, &kid) != NGX_OK) {
+            continue;
+        }
+        val_node = nxe_json_object_iter_value(it);
+        if (val_node == NULL || nxe_json_type(val_node) != NXE_JSON_STRING) {
+            ngx_log_error(NGX_LOG_WARN, log, 0,
+                          "nxe_jwx: keyval %V is not a string; skipped",
+                          &kid);
+            continue;
+        }
+        if (nxe_json_string(val_node, &val) != NGX_OK || val.len == 0) {
+            continue;
+        }
+
+        k = &jwks->keys[jwks->nkeys];
+
+        pkey = nxe_jwx_load_pem_pubkey(&val);
+        if (pkey != NULL) {
+            kty = nxe_jwx_kty_from_pkey(pkey);
+            if (kty == NXE_JWX_KTY_UNKNOWN) {
+                ngx_log_error(NGX_LOG_WARN, log, 0,
+                              "nxe_jwx: keyval %V has unsupported PEM key type",
+                              &kid);
+                EVP_PKEY_free(pkey);
+                continue;
+            }
+            k->pkey = pkey;
+            k->kty = kty;
+
+        } else {
+#if (NXE_JWX_HAVE_HMAC)
+            u_char *buf;
+
+            buf = ngx_pnalloc(pool, val.len);
+            if (buf == NULL) {
+                nxe_json_free(root);
+                return NULL;
+            }
+            ngx_memcpy(buf, val.data, val.len);
+            k->hmac_secret.data = buf;
+            k->hmac_secret.len = val.len;
+            k->kty = NXE_JWX_KTY_OCT;
+#else
+            ngx_log_error(NGX_LOG_WARN, log, 0,
+                          "nxe_jwx: keyval %V is not a recognizable PEM key;"
+                          " HMAC support is disabled at build time",
+                          &kid);
+            continue;
+#endif
+        }
+
+        k->kid = kid;
+        if (nxe_jwx_dup_str_to_pool(&k->kid, pool) != NGX_OK) {
+            if (k->pkey != NULL) {
+                EVP_PKEY_free(k->pkey);
+                k->pkey = NULL;
+            }
+#if (NXE_JWX_HAVE_HMAC)
+            if (k->hmac_secret.data != NULL && k->hmac_secret.len > 0) {
+                OPENSSL_cleanse(k->hmac_secret.data, k->hmac_secret.len);
+                k->hmac_secret.data = NULL;
+                k->hmac_secret.len = 0;
+            }
+#endif
             nxe_json_free(root);
             return NULL;
         }
 
-        pkey = nxe_jwx_load_pem_pubkey(&pem);
-        if (pkey == NULL) {
-            ngx_log_error(NGX_LOG_ERR, log, 0,
-                          "nxe_jwx: keyval 'k' is not a recognizable PEM public key");
-            nxe_json_free(root);
-            return NULL;
-        }
-
-        kty = nxe_jwx_kty_from_pkey(pkey);
-        if (kty == NXE_JWX_KTY_UNKNOWN) {
-            ngx_log_error(NGX_LOG_ERR, log, 0,
-                          "nxe_jwx: keyval 'k' has unsupported key type");
-            EVP_PKEY_free(pkey);
-            nxe_json_free(root);
-            return NULL;
-        }
-
-        jwks = nxe_jwx_jwks_alloc(pool, 1);
-        if (jwks == NULL) {
-            EVP_PKEY_free(pkey);
-            nxe_json_free(root);
-            return NULL;
-        }
-        jwks->keys[0].pkey = pkey;
-        jwks->keys[0].kty = kty;
-        jwks->nkeys = 1;
+        jwks->nkeys++;
     }
 
     nxe_json_free(root);
+
+    if (jwks->nkeys == 0) {
+        ngx_log_error(NGX_LOG_ERR, log, 0,
+                      "nxe_jwx: keyval produced zero usable keys");
+        return NULL;
+    }
 
     return jwks;
 }
