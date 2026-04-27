@@ -1,0 +1,7 @@
+/tests/test_runner
+/tests/test_runner_asan
+/tests/test_runner_cov
+/tests/*.gcno
+/tests/*.gcda
+/tests/*.gcov
+/tests/vendor/
