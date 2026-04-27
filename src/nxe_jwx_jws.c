@@ -492,7 +492,22 @@ nxe_jwx_jws_verify(const nxe_jwx_token_t *token, const nxe_jwx_jwks_t *jwks,
     kid = nxe_jwx_token_kid(token);
     n = nxe_jwx_jwks_size_internal(jwks);
 
-    /* Pass 1: kid match. */
+    /*
+     * Pass 1: kid-strict.  When the token names a kid and the keyset
+     * contains at least one key with that kid, only those keys are
+     * tried.  This pins the verifier to the operator's labelled key
+     * choice and prevents key-confusion regressions where a token
+     * intended for kid A is accepted by another compatible kid B
+     * sitting in the same JWKS.
+     *
+     * `kid_matched_any` distinguishes "the operator declared this
+     * kid but the signature didn't verify" (-> stop, fail closed)
+     * from "no key in the JWKS carries this kid" (-> fall through
+     * to pass 2 so kid-less or differently-labelled keys still get
+     * a chance).
+     */
+    ngx_flag_t kid_matched_any = 0;
+
     if (kid != NULL && kid->len > 0) {
         for (i = 0; i < n; i++) {
             struct nxe_jwx_key_s *k = nxe_jwx_jwks_key_at(jwks, i);
@@ -503,6 +518,7 @@ nxe_jwx_jws_verify(const nxe_jwx_token_t *token, const nxe_jwx_jwks_t *jwks,
             if (!nxe_jwx_str_eq(kid, &k->kid)) {
                 continue;
             }
+            kid_matched_any = 1;
             int rc = nxe_jwx_verify_with_key(k, alg, signing_input,
                                              signature, pool);
             if (rc == 1) {
@@ -514,26 +530,25 @@ nxe_jwx_jws_verify(const nxe_jwx_token_t *token, const nxe_jwx_jwks_t *jwks,
         }
     }
 
-    /* Pass 2: try every compatible key (kid-less or non-matching). */
-    for (i = 0; i < n; i++) {
-        struct nxe_jwx_key_s *k = nxe_jwx_jwks_key_at(jwks, i);
+    /*
+     * Pass 2: walk all compatible keys.  Skipped when pass 1 already
+     * tried at least one kid-matched key (kid-strict policy).
+     */
+    if (!kid_matched_any) {
+        for (i = 0; i < n; i++) {
+            struct nxe_jwx_key_s *k = nxe_jwx_jwks_key_at(jwks, i);
 
-        if (k == NULL) {
-            continue;
-        }
-        /* Skip the kid-matched keys we already tried in pass 1. */
-        if (kid != NULL && kid->len > 0 && k->kid.len > 0
-            && nxe_jwx_str_eq(kid, &k->kid))
-        {
-            continue;
-        }
-        int rc = nxe_jwx_verify_with_key(k, alg, signing_input,
-                                         signature, pool);
-        if (rc == 1) {
-            return NGX_OK;
-        }
-        if (rc < 0) {
-            any_internal_error = 1;
+            if (k == NULL) {
+                continue;
+            }
+            int rc = nxe_jwx_verify_with_key(k, alg, signing_input,
+                                             signature, pool);
+            if (rc == 1) {
+                return NGX_OK;
+            }
+            if (rc < 0) {
+                any_internal_error = 1;
+            }
         }
     }
 

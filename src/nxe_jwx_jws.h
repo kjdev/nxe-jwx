@@ -31,10 +31,18 @@
  *     key with a matching kid (or a kid-less oct key) for the
  *     verification to succeed.
  *
- * Key selection:
- *   - If the token's header has a "kid", the verifier first tries
- *     keys whose kid matches.  If none match (or the token has no
- *     kid) it tries every key whose kty/alg is compatible.
+ * Key selection (kid-strict):
+ *   - If the token names a "kid" and the keyset contains at least
+ *     one key with the same kid, ONLY those keys are tried.  A
+ *     signature failure on a kid-matched key falls through to
+ *     NGX_DECLINED rather than re-trying other keys.  This prevents
+ *     key-confusion regressions where a token intended for kid A
+ *     is accepted by another compatible kid B sitting in the same
+ *     JWKS.
+ *   - If the token names a kid that is absent from the keyset, the
+ *     verifier falls back to trying every key whose kty/alg is
+ *     compatible (e.g. for keysets without explicit kid labelling).
+ *   - If the token carries no kid, every compatible key is tried.
  *   - The first key that produces a valid signature wins.
  *
  * Return value:
