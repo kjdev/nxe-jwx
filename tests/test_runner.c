@@ -402,8 +402,33 @@ TEST(decode_too_many_segments){
 }
 
 TEST(decode_empty_segment){
+    /* Empty header or payload is still rejected; only the signature
+     * segment is allowed to be zero-length (covered separately). */
     ngx_str_t token = ngx_string("aaa..ccc");
     ASSERT(nxe_jwx_decode(&token, pool) == NULL);
+    return 0;
+}
+
+TEST(decode_empty_signature_accepted){
+    /* alg=none / unsigned tokens carry an empty signature segment.
+     * The decoder accepts them so callers that only consume claims
+     * (e.g. trusted-upstream propagation) can still extract the
+     * payload; verification will reject the same token via
+     * jws_empty_signature_rejected below. */
+    ngx_str_t token = ngx_string(
+        "eyJhbGciOiJub25lIn0."
+        "eyJzdWIiOiJhbGljZSJ9.");
+    nxe_jwx_token_t *t;
+    nxe_json_t *payload;
+    ngx_str_t sub;
+
+    t = nxe_jwx_decode(&token, pool);
+    ASSERT(t != NULL);
+
+    payload = nxe_jwx_token_payload(t);
+    ASSERT(payload != NULL);
+    ASSERT_EQ_INT(nxe_jwx_claims_get_string(payload, "sub", &sub), NGX_OK);
+    ASSERT_STR_EQ(&sub, "alice");
     return 0;
 }
 
@@ -1501,6 +1526,36 @@ TEST(jws_alg_unknown_rejected){
     return 0;
 }
 
+TEST(jws_empty_signature_rejected){
+    /* Pairs with decode_empty_signature_accepted: a token whose
+     * signature segment is empty (alg=none with empty third segment)
+     * decodes successfully but jws_verify must reject it before any
+     * key is consulted. */
+    EVP_PKEY *pkey;
+    ngx_str_t jwk, doc, token;
+    nxe_jwx_jwks_t *jwks;
+    nxe_jwx_token_t *t;
+
+    pkey = test_gen_rsa(2048);
+    jwk = test_jwk_rsa(pkey, "k1", "RS256", pool);
+    doc = test_jwks_build(&jwk, 1, pool);
+    jwks = nxe_jwx_jwks_parse(&doc, pool);
+    ASSERT(jwks != NULL);
+
+    /* alg=RS256 + empty signature (note trailing dot, no third segment). */
+    token.data = (u_char *) "eyJhbGciOiJSUzI1NiIsImtpZCI6ImsxIn0."
+                            "eyJzdWIiOiJhbGljZSJ9.";
+    token.len = ngx_strlen(token.data);
+
+    t = nxe_jwx_decode(&token, pool);
+    ASSERT(t != NULL);
+    ASSERT_EQ_INT(nxe_jwx_jws_verify(t, jwks, pool), NGX_DECLINED);
+
+    EVP_PKEY_free(pkey);
+    return 0;
+}
+
+
 TEST(jws_no_alg_rejected){
     EVP_PKEY *pkey;
     ngx_str_t jwk, doc, jwt;
@@ -1742,6 +1797,7 @@ main(void)
     RUN(decode_ok);
     RUN(decode_too_few_segments);
     RUN(decode_too_many_segments);
+    RUN(decode_empty_signature_accepted);
     RUN(decode_empty_segment);
     RUN(decode_invalid_base64);
     RUN(decode_header_not_object);
@@ -1821,6 +1877,7 @@ main(void)
     RUN(jws_hs384_roundtrip);
     RUN(jws_hs512_roundtrip);
     RUN(jws_alg_none_rejected);
+    RUN(jws_empty_signature_rejected);
     RUN(jws_alg_unknown_rejected);
     RUN(jws_no_alg_rejected);
     RUN(jws_signature_tampered);
