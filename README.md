@@ -15,7 +15,7 @@ JWT / JWS / JWKS library for nginx modules
   - `none` is always rejected
 - JWKS parsing (RSA / EC / OKP / `oct` optional) for both
   OpenSSL 1.1.x and 3.0+
-- Single-key keyval shortcut for compatibility with nginx-auth-jwt
+- Keyval shortcut (multi-kid) for compatibility with nginx-auth-jwt
 - Typed claim accessors (string / integer / boolean / array / object)
 
 ## Public API
@@ -28,7 +28,7 @@ JWT / JWS / JWKS library for nginx modules
 | `nxe_jwx_token_alg` | Get the `alg` header value |
 | `nxe_jwx_token_kid` | Get the `kid` header value |
 | `nxe_jwx_jwks_parse` | Parse a JWKS document |
-| `nxe_jwx_jwks_parse_keyval` | Parse a single-key keyval JSON |
+| `nxe_jwx_jwks_parse_keyval` | Parse a keyval-style JSON map (`{"kid": "PEM-or-secret", ...}`) |
 | `nxe_jwx_jwks_count` | Number of usable keys in a keyset |
 | `nxe_jwx_jws_verify` | Verify a token against a keyset |
 | `nxe_jwx_claims_get_*` | Typed accessors for top-level claims |
@@ -53,9 +53,28 @@ policy.
   key-confusion across algorithm families.
 - JWKS entries with `use="enc"` are dropped at parse time so that
   encryption keys cannot be used for signature verification.
+- RSA keys whose modulus falls outside `[NXE_JWX_MIN_RSA_BITS,
+  NXE_JWX_MAX_RSA_BITS]` (default 2048…16384 bits) are rejected at
+  parse time: too small to be secure, too large to bound the cost of
+  subsequent signature verifications.
+- Keyval entries whose key is the empty string `""` are dropped at
+  parse time.  An empty `kid` is almost always a configuration
+  mistake and would otherwise become a silent kid-less fallback
+  candidate at verification time.
 - All failures (no usable key, signature mismatch, `alg` mismatch,
   `kid` miss, ...) collapse to `NGX_DECLINED`; callers cannot tell
   which check rejected the token, denying an oracle to attackers.
+
+## Known limitations
+
+- JWT header / payload claim strings (e.g. `sub`, `email`) survive
+  inside the JSON parser's internal buffers until the surrounding
+  `ngx_pool_t` is destroyed.  The raw segment buffers and the keyset
+  itself are explicitly cleansed via `OPENSSL_cleanse`, but the
+  jansson-internal copy is released by `nxe_json_free` without a
+  cleanse step.  This is a deliberate design boundary: callers
+  handling sensitive PII are expected to keep the JWT pool
+  short-lived so the entire allocation goes away with it.
 
 ## Integration
 
