@@ -716,7 +716,19 @@ nxe_jwx_parse_one_key(struct nxe_jwx_key_s *k, nxe_json_t *jwk,
     }
 
     /* Optional metadata. */
-    (void) nxe_jwx_string_field(jwk, "kid", &k->kid);
+    if (nxe_jwx_string_field(jwk, "kid", &k->kid) == NGX_OK
+        && k->kid.len == 0)
+    {
+        /*
+         * RFC 7517 leaves "kid" optional, but an explicit empty string
+         * is almost certainly a configuration mistake: the resulting
+         * key would silently become a kid-less fallback candidate at
+         * verification time, mirroring the keyval rejection above.
+         */
+        ngx_log_error(NGX_LOG_WARN, log, 0,
+                      "nxe_jwx: JWK has an empty \"kid\"; skipped");
+        return NGX_DECLINED;
+    }
     (void) nxe_jwx_string_field(jwk, "alg", &k->alg);
     (void) nxe_jwx_string_field(jwk, "crv", &k->crv);
 
