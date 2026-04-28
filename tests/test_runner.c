@@ -992,6 +992,81 @@ TEST(jwks_multi_keys){
     return 0;
 }
 
+TEST(jwks_empty_kid_skipped){
+    /*
+     * A standard JWKS document mixing one well-formed JWK with an
+     * explicit empty-kid JWK should yield only the well-formed kid;
+     * the empty-kid entry is rejected with a warning so it cannot
+     * become a silent kid-less fallback candidate at verification
+     * time, mirroring the keyval-side guard.
+     */
+    EVP_PKEY *pkey;
+    ngx_str_t parts[2], doc;
+    nxe_jwx_jwks_t *jwks;
+    ngx_str_t alpha = ngx_string("alpha");
+
+    pkey = test_gen_rsa(2048);
+    ASSERT(pkey != NULL);
+    parts[0] = test_jwk_rsa(pkey, "alpha", "RS256", pool);
+    parts[1] = test_jwk_rsa(pkey, "", "RS256", pool);
+    ASSERT(parts[0].len > 0);
+    ASSERT(parts[1].len > 0);
+    doc = test_jwks_build(parts, 2, pool);
+    ASSERT(doc.len > 0);
+
+    jwks = nxe_jwx_jwks_parse(&doc, pool);
+    ASSERT(jwks != NULL);
+    ASSERT_EQ_INT(nxe_jwx_jwks_count(jwks), 1);
+    ASSERT_EQ_INT(nxe_jwx_jwks_has_kid(jwks, &alpha), 1);
+
+    EVP_PKEY_free(pkey);
+    return 0;
+}
+
+TEST(jwks_empty_kid_only_rejected){
+    /* Sole JWK entry has "kid":"" -> zero usable keys -> NULL. */
+    EVP_PKEY *pkey;
+    ngx_str_t jwk, doc;
+
+    pkey = test_gen_rsa(2048);
+    ASSERT(pkey != NULL);
+    jwk = test_jwk_rsa(pkey, "", "RS256", pool);
+    ASSERT(jwk.len > 0);
+    doc = test_jwks_build(&jwk, 1, pool);
+    ASSERT(doc.len > 0);
+
+    ASSERT(nxe_jwx_jwks_parse(&doc, pool) == NULL);
+
+    EVP_PKEY_free(pkey);
+    return 0;
+}
+
+TEST(jwks_kid_field_absent_ok){
+    /*
+     * Regression: a JWK that omits the "kid" field entirely (RFC 7517
+     * leaves it optional) must still be accepted as a kid-less key.
+     * The empty-kid rejection applies only when the field is present
+     * with an empty string, not when it is absent.
+     */
+    EVP_PKEY *pkey;
+    ngx_str_t jwk, doc;
+    nxe_jwx_jwks_t *jwks;
+
+    pkey = test_gen_rsa(2048);
+    ASSERT(pkey != NULL);
+    jwk = test_jwk_rsa(pkey, NULL, "RS256", pool);
+    ASSERT(jwk.len > 0);
+    doc = test_jwks_build(&jwk, 1, pool);
+    ASSERT(doc.len > 0);
+
+    jwks = nxe_jwx_jwks_parse(&doc, pool);
+    ASSERT(jwks != NULL);
+    ASSERT_EQ_INT(nxe_jwx_jwks_count(jwks), 1);
+
+    EVP_PKEY_free(pkey);
+    return 0;
+}
+
 
 /* === JWKS keyval === */
 
@@ -2168,6 +2243,9 @@ main(void)
     RUN(jwks_oct_ok);
     RUN(jwks_oct_missing_k);
     RUN(jwks_multi_keys);
+    RUN(jwks_empty_kid_skipped);
+    RUN(jwks_empty_kid_only_rejected);
+    RUN(jwks_kid_field_absent_ok);
 
     /* jwks keyval */
     RUN(jwks_keyval_pem_ok);
