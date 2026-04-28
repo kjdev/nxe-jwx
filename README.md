@@ -57,10 +57,13 @@ policy.
   NXE_JWX_MAX_RSA_BITS]` (default 2048…16384 bits) are rejected at
   parse time: too small to be secure, too large to bound the cost of
   subsequent signature verifications.
-- Keyval entries whose key is the empty string `""` are dropped at
-  parse time.  An empty `kid` is almost always a configuration
-  mistake and would otherwise become a silent kid-less fallback
-  candidate at verification time.
+- Entries that declare an empty `kid` are rejected at parse time on
+  both ingest paths: a JWK with `"kid": ""` in a JWKS document and a
+  keyval map whose key is the empty string `""`.  An empty `kid` is
+  almost always a configuration mistake and would otherwise become a
+  silent kid-less fallback candidate at verification time.  Omitting
+  the `kid` field entirely is still permitted (RFC 7517 leaves it
+  optional) and produces a kid-less key as before.
 - All failures (no usable key, signature mismatch, `alg` mismatch,
   `kid` miss, ...) collapse to `NGX_DECLINED`; callers cannot tell
   which check rejected the token, denying an oracle to attackers.
