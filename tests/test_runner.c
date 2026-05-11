@@ -964,6 +964,109 @@ TEST(jwks_oct_missing_k){
     return 0;
 }
 
+/*
+ * Corrupt base64 in a JWK field must propagate as a hard error
+ * (NGX_ERROR), rejecting the entire JWKS document.  A "missing field"
+ * skip would let a valid sibling JWK survive, so these tests pair a
+ * well-formed key with a corrupt one and assert the whole parse fails.
+ */
+TEST(jwks_rsa_corrupt_base64_n){
+    EVP_PKEY *ec;
+    ngx_str_t parts[2];
+    ngx_str_t doc;
+
+    ec = test_gen_ec(NID_X9_62_prime256v1);
+    ASSERT(ec != NULL);
+    parts[0] = test_jwk_ec(ec, "P-256", 32, "good", "ES256", pool);
+    ngx_str_set(&parts[1],
+                "{\"kty\":\"RSA\",\"kid\":\"bad\","
+                "\"n\":\"AA@AA\",\"e\":\"AQAB\"}");
+    doc = test_jwks_build(parts, 2, pool);
+
+    ASSERT(nxe_jwx_jwks_parse(&doc, pool) == NULL);
+
+    EVP_PKEY_free(ec);
+    return 0;
+}
+
+TEST(jwks_rsa_corrupt_base64_e){
+    EVP_PKEY *ec;
+    ngx_str_t parts[2];
+    ngx_str_t doc;
+
+    ec = test_gen_ec(NID_X9_62_prime256v1);
+    ASSERT(ec != NULL);
+    parts[0] = test_jwk_ec(ec, "P-256", 32, "good", "ES256", pool);
+    ngx_str_set(&parts[1],
+                "{\"kty\":\"RSA\",\"kid\":\"bad\","
+                "\"n\":\"AQAB\",\"e\":\"AA@AA\"}");
+    doc = test_jwks_build(parts, 2, pool);
+
+    ASSERT(nxe_jwx_jwks_parse(&doc, pool) == NULL);
+
+    EVP_PKEY_free(ec);
+    return 0;
+}
+
+TEST(jwks_ec_corrupt_base64_x){
+    EVP_PKEY *rsa;
+    ngx_str_t parts[2];
+    ngx_str_t doc;
+
+    rsa = test_gen_rsa(2048);
+    ASSERT(rsa != NULL);
+    parts[0] = test_jwk_rsa(rsa, "good", "RS256", pool);
+    ngx_str_set(&parts[1],
+                "{\"kty\":\"EC\",\"crv\":\"P-256\",\"kid\":\"bad\","
+                "\"x\":\"AA@AA\",\"y\":\"AAAA\"}");
+    doc = test_jwks_build(parts, 2, pool);
+
+    ASSERT(nxe_jwx_jwks_parse(&doc, pool) == NULL);
+
+    EVP_PKEY_free(rsa);
+    return 0;
+}
+
+TEST(jwks_okp_corrupt_base64_x){
+    EVP_PKEY *rsa;
+    ngx_str_t parts[2];
+    ngx_str_t doc;
+
+    rsa = test_gen_rsa(2048);
+    ASSERT(rsa != NULL);
+    parts[0] = test_jwk_rsa(rsa, "good", "RS256", pool);
+    ngx_str_set(&parts[1],
+                "{\"kty\":\"OKP\",\"crv\":\"Ed25519\",\"kid\":\"bad\","
+                "\"x\":\"AA@AA\"}");
+    doc = test_jwks_build(parts, 2, pool);
+
+    ASSERT(nxe_jwx_jwks_parse(&doc, pool) == NULL);
+
+    EVP_PKEY_free(rsa);
+    return 0;
+}
+
+#if (NXE_JWX_HAVE_HMAC)
+TEST(jwks_oct_corrupt_base64_k){
+    EVP_PKEY *rsa;
+    ngx_str_t parts[2];
+    ngx_str_t doc;
+
+    rsa = test_gen_rsa(2048);
+    ASSERT(rsa != NULL);
+    parts[0] = test_jwk_rsa(rsa, "good", "RS256", pool);
+    ngx_str_set(&parts[1],
+                "{\"kty\":\"oct\",\"kid\":\"bad\","
+                "\"k\":\"AA@AA\"}");
+    doc = test_jwks_build(parts, 2, pool);
+
+    ASSERT(nxe_jwx_jwks_parse(&doc, pool) == NULL);
+
+    EVP_PKEY_free(rsa);
+    return 0;
+}
+#endif
+
 TEST(jwks_multi_keys){
     /* RSA + EC + OKP + oct in a single doc. */
     EVP_PKEY *rsa, *ec, *okp;
@@ -2242,6 +2345,13 @@ main(void)
     RUN(jwks_okp_wrong_x_len);
     RUN(jwks_oct_ok);
     RUN(jwks_oct_missing_k);
+    RUN(jwks_rsa_corrupt_base64_n);
+    RUN(jwks_rsa_corrupt_base64_e);
+    RUN(jwks_ec_corrupt_base64_x);
+    RUN(jwks_okp_corrupt_base64_x);
+#if (NXE_JWX_HAVE_HMAC)
+    RUN(jwks_oct_corrupt_base64_k);
+#endif
     RUN(jwks_multi_keys);
     RUN(jwks_empty_kid_skipped);
     RUN(jwks_empty_kid_only_rejected);
