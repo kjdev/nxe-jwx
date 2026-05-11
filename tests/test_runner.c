@@ -742,7 +742,7 @@ TEST(jwks_rsa_modulus_too_large){
     ngx_str_t n_b64, e_b64;
     u_char *p;
     static const char head[] = "{\"keys\":[{\"kty\":\"RSA\",\"n\":\"";
-    static const char mid[]  = "\",\"e\":\"";
+    static const char mid[] = "\",\"e\":\"";
     static const char tail[] = "\"}]}";
     ngx_str_t doc;
 
@@ -1321,7 +1321,7 @@ TEST(jwks_keyval_empty_kid_skipped){
     nxe_jwx_jwks_t *jwks;
     ngx_str_t alpha = ngx_string("alpha");
     static const char head[] = "{\"\":\"";
-    static const char mid[]  = "\",\"alpha\":\"";
+    static const char mid[] = "\",\"alpha\":\"";
     static const char tail[] = "\"}";
     u_char *p;
     size_t escaped = 0, i;
@@ -1340,13 +1340,19 @@ TEST(jwks_keyval_empty_kid_skipped){
     p = doc.data;
     memcpy(p, head, sizeof(head) - 1); p += sizeof(head) - 1;
     for (i = 0; i < pem.len; i++) {
-        if (pem.data[i] == '\n') { *p++ = '\\'; *p++ = 'n'; }
-        else                      { *p++ = pem.data[i]; }
+        if (pem.data[i] == '\n') {
+            *p++ = '\\'; *p++ = 'n';
+        } else {
+            *p++ = pem.data[i];
+        }
     }
     memcpy(p, mid, sizeof(mid) - 1); p += sizeof(mid) - 1;
     for (i = 0; i < pem.len; i++) {
-        if (pem.data[i] == '\n') { *p++ = '\\'; *p++ = 'n'; }
-        else                      { *p++ = pem.data[i]; }
+        if (pem.data[i] == '\n') {
+            *p++ = '\\'; *p++ = 'n';
+        } else {
+            *p++ = pem.data[i];
+        }
     }
     memcpy(p, tail, sizeof(tail) - 1);
 
@@ -1382,8 +1388,11 @@ TEST(jwks_keyval_empty_kid_only_rejected){
     p = doc.data;
     memcpy(p, head, sizeof(head) - 1); p += sizeof(head) - 1;
     for (i = 0; i < pem.len; i++) {
-        if (pem.data[i] == '\n') { *p++ = '\\'; *p++ = 'n'; }
-        else                      { *p++ = pem.data[i]; }
+        if (pem.data[i] == '\n') {
+            *p++ = '\\'; *p++ = 'n';
+        } else {
+            *p++ = pem.data[i];
+        }
     }
     memcpy(p, tail, sizeof(tail) - 1);
 
@@ -1393,45 +1402,38 @@ TEST(jwks_keyval_empty_kid_only_rejected){
 }
 
 
-#if (NXE_JWX_HAVE_HMAC)
-
-TEST(jwks_keyval_hmac_secret_ok){
-    /* Multi-kid with HMAC enabled: a non-PEM string value is taken as
-     * an opaque oct/HMAC secret.  The kid is preserved verbatim so the
-     * verifier can match by kid. */
-    ngx_str_t doc = ngx_string("{\"test1\":\"test1.secret\"}");
-    nxe_jwx_jwks_t *jwks;
-
-    jwks = nxe_jwx_jwks_parse_keyval(&doc, pool);
-    ASSERT(jwks != NULL);
-    ASSERT_EQ_INT(nxe_jwx_jwks_count(jwks), 1);
-    return 0;
-}
-
-
-TEST(jwks_keyval_multi_kid_hmac){
-    /* Two HMAC secrets in one document; both must be present. */
-    ngx_str_t doc = ngx_string(
-        "{\"k1\":\"alpha-secret\",\"k2\":\"beta-secret\"}");
-    nxe_jwx_jwks_t *jwks;
-
-    jwks = nxe_jwx_jwks_parse_keyval(&doc, pool);
-    ASSERT(jwks != NULL);
-    ASSERT_EQ_INT(nxe_jwx_jwks_count(jwks), 2);
-    return 0;
-}
-
-#else
-
-TEST(jwks_keyval_invalid_pem_without_hmac){
-    /* Without HMAC support, a non-PEM string can't be classified as
-     * any supported key, so the document yields zero usable keys. */
+TEST(jwks_keyval_non_pem_rejected){
+    /* keyval only accepts PEM public keys.  A non-PEM string is never
+     * interpreted as an HMAC secret -- accepting that would expose the
+     * operator's public PEM text as an HMAC key (algorithm confusion). */
     ngx_str_t doc = ngx_string("{\"k\":\"not a pem\"}");
     ASSERT(nxe_jwx_jwks_parse_keyval(&doc, pool) == NULL);
     return 0;
 }
 
-#endif
+
+TEST(jwks_keyval_pem_looking_corrupt_rejected){
+    /* A value that starts with the PEM marker but fails to parse must
+     * be rejected, never silently accepted as an HMAC secret.  This is
+     * the configuration-time variant of the RSA/EC -> HS*
+     * algorithm-confusion attack. */
+    ngx_str_t doc = ngx_string(
+        "{\"k\":\"-----BEGIN PUBLIC KEY-----\\nGARBAGE\\n"
+        "-----END PUBLIC KEY-----\\n\"}");
+    ASSERT(nxe_jwx_jwks_parse_keyval(&doc, pool) == NULL);
+    return 0;
+}
+
+
+TEST(jwks_keyval_multi_kid_hmac_rejected){
+    /* Multiple non-PEM values: every entry is skipped, so the document
+     * has zero usable keys and parse_keyval returns NULL.  Mirrors the
+     * pre-fix "multi-kid hmac" fixture to guard against regression. */
+    ngx_str_t doc = ngx_string(
+        "{\"k1\":\"alpha-secret\",\"k2\":\"beta-secret\"}");
+    ASSERT(nxe_jwx_jwks_parse_keyval(&doc, pool) == NULL);
+    return 0;
+}
 
 
 TEST(jwks_keyval_multi_kid_pem){
@@ -1440,7 +1442,7 @@ TEST(jwks_keyval_multi_kid_pem){
     ngx_str_t pem1, pem2, doc;
     nxe_jwx_jwks_t *jwks;
     static const char head[] = "{\"alpha\":\"";
-    static const char mid[]  = "\",\"beta\":\"";
+    static const char mid[] = "\",\"beta\":\"";
     static const char tail[] = "\"}";
     u_char *p;
     size_t e1 = 0, e2 = 0, i;
@@ -1464,13 +1466,19 @@ TEST(jwks_keyval_multi_kid_pem){
     p = doc.data;
     memcpy(p, head, sizeof(head) - 1); p += sizeof(head) - 1;
     for (i = 0; i < pem1.len; i++) {
-        if (pem1.data[i] == '\n') { *p++ = '\\'; *p++ = 'n'; }
-        else                      { *p++ = pem1.data[i]; }
+        if (pem1.data[i] == '\n') {
+            *p++ = '\\'; *p++ = 'n';
+        } else {
+            *p++ = pem1.data[i];
+        }
     }
     memcpy(p, mid, sizeof(mid) - 1); p += sizeof(mid) - 1;
     for (i = 0; i < pem2.len; i++) {
-        if (pem2.data[i] == '\n') { *p++ = '\\'; *p++ = 'n'; }
-        else                      { *p++ = pem2.data[i]; }
+        if (pem2.data[i] == '\n') {
+            *p++ = '\\'; *p++ = 'n';
+        } else {
+            *p++ = pem2.data[i];
+        }
     }
     memcpy(p, tail, sizeof(tail) - 1);
 
@@ -1848,7 +1856,7 @@ TEST(jws_empty_signature_rejected){
 
     /* alg=RS256 + empty signature (note trailing dot, no third segment). */
     token.data = (u_char *) "eyJhbGciOiJSUzI1NiIsImtpZCI6ImsxIn0."
-                            "eyJzdWIiOiJhbGljZSJ9.";
+                 "eyJzdWIiOiJhbGljZSJ9.";
     token.len = ngx_strlen(token.data);
 
     t = nxe_jwx_decode(&token, pool);
@@ -1964,7 +1972,7 @@ TEST(jwks_has_kid_basic){
     ngx_str_t parts[2], doc;
     nxe_jwx_jwks_t *jwks;
     ngx_str_t k_yes = ngx_string("present");
-    ngx_str_t k_no  = ngx_string("absent");
+    ngx_str_t k_no = ngx_string("absent");
     ngx_str_t k_empty = ngx_null_string;
 
     p1 = test_gen_rsa(2048); ASSERT(p1 != NULL);
@@ -2364,12 +2372,9 @@ main(void)
     RUN(jwks_keyval_empty_kid_skipped);
     RUN(jwks_keyval_empty_kid_only_rejected);
     RUN(jwks_keyval_multi_kid_pem);
-#if (NXE_JWX_HAVE_HMAC)
-    RUN(jwks_keyval_hmac_secret_ok);
-    RUN(jwks_keyval_multi_kid_hmac);
-#else
-    RUN(jwks_keyval_invalid_pem_without_hmac);
-#endif
+    RUN(jwks_keyval_non_pem_rejected);
+    RUN(jwks_keyval_pem_looking_corrupt_rejected);
+    RUN(jwks_keyval_multi_kid_hmac_rejected);
     RUN(jwks_keyval_root_not_object);
     RUN(jwks_keyval_invalid_json);
     RUN(jwks_keyval_null_args);
