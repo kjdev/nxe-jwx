@@ -44,17 +44,21 @@ nxe_jwx_jwks_t *nxe_jwx_jwks_parse(const ngx_str_t *jwks_json,
 
 /*
  * Parse a key-value style document of the form
- *   { "kid1": "PEM-or-raw", "kid2": "...", ... }
+ *   { "kid1": "<PEM>", "kid2": "<PEM>", ... }
  *
  * Compatibility shim for nginx-auth-jwt's `auth_jwt_keyval` directive,
  * which lets operators load keys from a flat JSON map rather than a
- * proper JWKS document.  Each value is interpreted in this order:
- *   1. PEM-encoded public key (RSA / EC / OKP).  The key type is
- *      derived from the parsed EVP_PKEY.
- *   2. With NXE_JWX_HAVE_HMAC, an opaque oct (HMAC) secret.  The bytes
- *      are stored verbatim and cleansed via OPENSSL_cleanse at
- *      cleanup; no base64url decoding is performed.
- *   3. Otherwise the entry is skipped with a warning.
+ * proper JWKS document.  Each value must be a PEM-encoded public key
+ * (RSA / EC / OKP); the key type is derived from the parsed EVP_PKEY.
+ * Any value that does not parse as PEM is skipped with a warning.
+ *
+ * HMAC (oct) secrets are intentionally NOT supported here, even when
+ * the library is built with NXE_JWX_HAVE_HMAC.  Accepting raw bytes as
+ * an HMAC fallback would let a typo in the operator's PEM be used as
+ * the HMAC key and enable the classic RSA/EC -> HS* algorithm-
+ * confusion forgery, because the operator's "public" PEM text is
+ * itself public information.  Operators that need HMAC must supply a
+ * proper JWKS document with `kty: "oct"` entries.
  *
  * Iteration order matches the JSON document's insertion order.  The
  * same DoS limits as nxe_jwx_jwks_parse apply (size, key count).

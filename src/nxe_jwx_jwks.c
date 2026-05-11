@@ -9,11 +9,13 @@
  * for both branches.
  *
  *   - JWKS:    {"keys": [{...}, ...]}        nxe_jwx_jwks_parse
- *   - keyval:  {"kid": "PEM-or-raw", ...}    nxe_jwx_jwks_parse_keyval
+ *   - keyval:  {"kid": "<PEM>", ...}         nxe_jwx_jwks_parse_keyval
  *
  * Each successfully decoded key produces an EVP_PKEY (or, with
- * NXE_JWX_HAVE_HMAC, a raw HMAC buffer) which is freed by a pool
- * cleanup handler.
+ * NXE_JWX_HAVE_HMAC and a JWKS oct entry, a raw HMAC buffer) which is
+ * freed by a pool cleanup handler.  The keyval parser only accepts
+ * PEM public keys; HMAC secrets must be supplied via a JWKS oct entry
+ * to avoid PEM->HMAC algorithm-confusion forgeries.
  */
 
 #include <ngx_config.h>
@@ -939,15 +941,20 @@ nxe_jwx_jwks_parse_keyval(const ngx_str_t *keyval_json, ngx_pool_t *pool)
     size_t nkeys;
 
     /*
-     * Keyval document layout:  { "<kid>": "<value>", ... }
+     * Keyval document layout:  { "<kid>": "<PEM>", ... }
      *
-     * Each value is interpreted as follows, in order:
-     *   1. A PEM-encoded public key (RSA / EC / OKP).  Successful PEM
-     *      load determines the key type via the underlying EVP_PKEY.
-     *   2. With NXE_JWX_HAVE_HMAC, the raw symmetric secret for an
-     *      oct (HMAC) key.  The bytes are copied into the pool and
-     *      cleansed at cleanup time.
-     *   3. Otherwise the entry is skipped with a warning.
+     * Each value must be a PEM-encoded public key (RSA / EC / OKP).
+     * Successful PEM load determines the key type via the underlying
+     * EVP_PKEY; any value that does not parse as PEM is skipped with
+     * a warning.
+     *
+     * HMAC (oct) secrets are NOT accepted here even when the library
+     * is built with NXE_JWX_HAVE_HMAC: a fall-through to "treat the
+     * raw bytes as an HMAC secret" would let a typo'd PEM value be
+     * used to forge tokens via the classic RSA/EC -> HS* algorithm-
+     * confusion attack, because the operator's "public" PEM text is
+     * itself public.  Operators that need HMAC must use a proper
+     * JWKS document with `kty: "oct"` entries.
      *
      * The iteration is driven by nxe_json_object_iter*; the document
      * size and key count are bounded by the same DoS limits used for
@@ -1042,53 +1049,37 @@ nxe_jwx_jwks_parse_keyval(const ngx_str_t *keyval_json, ngx_pool_t *pool)
         k = &jwks->keys[jwks->nkeys];
 
         pkey = nxe_jwx_load_pem_pubkey(&val);
-        if (pkey != NULL) {
-            kty = nxe_jwx_kty_from_pkey(pkey);
-            if (kty == NXE_JWX_KTY_UNKNOWN) {
-                ngx_log_error(NGX_LOG_WARN, log, 0,
-                              "nxe_jwx: keyval %V has unsupported PEM key type",
-                              &kid);
-                EVP_PKEY_free(pkey);
-                continue;
-            }
-            k->pkey = pkey;
-            k->kty = kty;
-
-        } else {
-#if (NXE_JWX_HAVE_HMAC)
-            u_char *buf;
-
-            buf = ngx_pnalloc(pool, val.len);
-            if (buf == NULL) {
-                nxe_json_free(root);
-                return NULL;
-            }
-            ngx_memcpy(buf, val.data, val.len);
-            k->hmac_secret.data = buf;
-            k->hmac_secret.len = val.len;
-            k->kty = NXE_JWX_KTY_OCT;
-#else
+        if (pkey == NULL) {
+            /*
+             * Reject anything that isn't a valid PEM public key.  We
+             * deliberately do not fall back to "store as raw HMAC
+             * secret": that path is reachable by a single typo in
+             * the operator's PEM and would let the (public) PEM text
+             * be used as an HMAC key, enabling RSA/EC -> HS*
+             * algorithm-confusion forgeries.  HMAC secrets must go
+             * through a proper JWKS oct entry.
+             */
             ngx_log_error(NGX_LOG_WARN, log, 0,
-                          "nxe_jwx: keyval %V is not a recognizable PEM key;"
-                          " HMAC support is disabled at build time",
+                          "nxe_jwx: keyval %V is not a valid PEM public key;"
+                          " skipped",
                           &kid);
             continue;
-#endif
         }
+        kty = nxe_jwx_kty_from_pkey(pkey);
+        if (kty == NXE_JWX_KTY_UNKNOWN) {
+            ngx_log_error(NGX_LOG_WARN, log, 0,
+                          "nxe_jwx: keyval %V has unsupported PEM key type",
+                          &kid);
+            EVP_PKEY_free(pkey);
+            continue;
+        }
+        k->pkey = pkey;
+        k->kty = kty;
 
         k->kid = kid;
         if (nxe_jwx_dup_str_to_pool(&k->kid, pool) != NGX_OK) {
-            if (k->pkey != NULL) {
-                EVP_PKEY_free(k->pkey);
-                k->pkey = NULL;
-            }
-#if (NXE_JWX_HAVE_HMAC)
-            if (k->hmac_secret.data != NULL && k->hmac_secret.len > 0) {
-                OPENSSL_cleanse(k->hmac_secret.data, k->hmac_secret.len);
-                k->hmac_secret.data = NULL;
-                k->hmac_secret.len = 0;
-            }
-#endif
+            EVP_PKEY_free(k->pkey);
+            k->pkey = NULL;
             nxe_json_free(root);
             return NULL;
         }
