@@ -1,5 +1,29 @@
 # Changelog
 
+## [9c041dc](../../commit/9c041dc) - 2026-05-11
+
+### Fixed
+
+- Drop the PEM -> HMAC fallback from
+  `nxe_jwx_jwks_parse_keyval()` to close a PEM/HMAC
+  algorithm-confusion vector
+  - Until now, a value that failed PEM parsing was silently
+    stored as a raw oct/HMAC secret when `NXE_JWX_HAVE_HMAC`
+    was enabled. Because public PEM text is itself public,
+    any typo in the operator's configured PEM would let an
+    attacker compute
+    `HMAC(<PEM text>, "<header_b64>.<payload_b64>")` and
+    forge a JWT that verifies against the silently generated
+    oct key -- a configuration-time variant of the classic
+    RSA/EC -> HS* algorithm-confusion attack
+  - keyval is now restricted to PEM public keys
+    (RSA / EC / OKP). A non-PEM value logs a warning and is
+    skipped, regardless of `NXE_JWX_HAVE_HMAC`
+  - HMAC (oct) secrets must be supplied via a proper JWKS
+    document with `kty: "oct"` entries; that path already
+    validates the secret as a JWK field rather than as
+    opaque bytes
+
 ## [ac6d2b3](../../commit/ac6d2b3) - 2026-05-11
 
 ### Changed
