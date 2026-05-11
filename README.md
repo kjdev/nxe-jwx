@@ -28,7 +28,7 @@ JWT / JWS / JWKS library for nginx modules
 | `nxe_jwx_token_alg` | Get the `alg` header value |
 | `nxe_jwx_token_kid` | Get the `kid` header value |
 | `nxe_jwx_jwks_parse` | Parse a JWKS document |
-| `nxe_jwx_jwks_parse_keyval` | Parse a keyval-style JSON map (`{"kid": "PEM-or-secret", ...}`) |
+| `nxe_jwx_jwks_parse_keyval` | Parse a keyval-style JSON map (`{"kid": "<PEM>", ...}`; PEM public keys only) |
 | `nxe_jwx_jwks_count` | Number of usable keys in a keyset |
 | `nxe_jwx_jws_verify` | Verify a token against a keyset |
 | `nxe_jwx_claims_get_*` | Typed accessors for top-level claims |
