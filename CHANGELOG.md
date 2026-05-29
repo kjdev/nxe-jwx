@@ -1,5 +1,19 @@
 # Changelog
 
+## [9f35dad](../../commit/9f35dad) - 2026-05-29
+
+### Changed
+
+- Document that `nxe_jwx_token_alg()` / `nxe_jwx_token_kid()` return
+  NUL-terminated `data` as a public contract (no implementation change)
+  - The returned `ngx_str_t` is retained verbatim from
+    `nxe_json_string()`, so `data[len] == '\0'` is now an explicit,
+    inherited guarantee from nxe-json 0.5.0's string contract
+  - Callers may pass `data` directly to C string APIs (`strlen`,
+    `ngx_strcmp`) when the claim has no embedded NUL bytes, removing
+    the prior undefined-behavior risk in upstream consumers that cast
+    `data` to `const char *`
+
 ## [9c041dc](../../commit/9c041dc) - 2026-05-11
 
 ### Fixed
