@@ -123,7 +123,7 @@ so they appear in the link line exactly once.
 
 | Library  | Required version | Notes |
 |----------|------------------|-------|
-| nxe-json | >= 0.3.0         | Provided by the parent module as a sibling submodule; the object iteration API (`nxe_json_object_size` / `nxe_json_object_iter*`) used by the multi-kid keyval parser landed in 0.3.0 |
+| nxe-json | >= 0.5.0         | Provided by the parent module as a sibling submodule. The object iteration API (`nxe_json_object_size` / `nxe_json_object_iter*`) used by the multi-kid keyval parser landed in 0.3.0; the `nxe_json_string` NUL-termination contract that `nxe_jwx_token_alg` / `_kid` rely on was published in 0.5.0 |
 | OpenSSL  | >= 1.1.1         | Both 1.1.x and 3.0+ are supported |
 | jansson  | >= 2.14          | Transitive via nxe-json (`json_object_iter_key_len` requires 2.14) |
 
@@ -134,7 +134,7 @@ nginx module.  The unit test suite uses `tests/ngx_compat/` —
 malloc-backed stubs of the nginx core types — so no nginx source tree
 is required.  It does, however, need the `nxe-json` sources at
 `tests/vendor/nxe-json`, which come from a test-only submodule pinned
-to the supported minimum version (v0.3.0).  Initialise the submodule
+to the supported minimum version (v0.5.0).  Initialise the submodule
 once after cloning:
 
 ```sh
