@@ -58,10 +58,23 @@ nxe_json_t *nxe_jwx_token_header(const nxe_jwx_token_t *token);
 /* The full parsed payload object (JSON object). */
 nxe_json_t *nxe_jwx_token_payload(const nxe_jwx_token_t *token);
 
-/* "alg" claim from the header, or NULL if absent / wrong type. */
+/*
+ * "alg" / "kid" claims from the header, or NULL if absent / wrong type.
+ *
+ * The returned data is sourced verbatim from nxe_json_string() (no copy
+ * is made by nxe-jwx) and therefore inherits its NUL-termination
+ * contract: the byte at `ret->data[ret->len]` is guaranteed to be '\0'.
+ * `ret->len` excludes the terminator and reflects the raw byte length,
+ * so binary safety is preserved separately.  Callers MAY pass
+ * `ret->data` directly to C string APIs (strlen, ngx_strcmp, %s)
+ * provided the claim contains no embedded NUL bytes.
+ *
+ * NOTE: this guarantee is delegated to nxe_json_string() (see
+ * nxe-json/src/nxe_json.h).  Should nxe-jwx ever carve its own string
+ * buffer instead of retaining the nxe-json node, that path must
+ * NUL-terminate the buffer itself to keep this contract.
+ */
 const ngx_str_t *nxe_jwx_token_alg(const nxe_jwx_token_t *token);
-
-/* "kid" claim from the header, or NULL if absent / wrong type. */
 const ngx_str_t *nxe_jwx_token_kid(const nxe_jwx_token_t *token);
 
 
