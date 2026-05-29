@@ -33,6 +33,12 @@ JWT / JWS / JWKS library for nginx modules
 | `nxe_jwx_jws_verify` | Verify a token against a keyset |
 | `nxe_jwx_claims_get_*` | Typed accessors for top-level claims |
 
+`nxe_jwx_token_alg` / `nxe_jwx_token_kid` return a pointer whose
+`data` is NUL-terminated (`data[len] == '\0'`, inherited from
+nxe-json's `nxe_json_string` contract); `len` excludes the terminator.
+Callers may pass `data` directly to C string APIs (`strlen`,
+`ngx_strcmp`) when the claim has no embedded NUL bytes.
+
 The library does **not** validate registered claims (`iss` / `aud` /
 `exp` / `iat` / `nbf` / `jti`); each upstream module enforces its own
 policy.
