@@ -23,7 +23,7 @@ if [ -z "$nxe_jwx_dir" ]; then
 fi
 
 if [ -z "$nxe_json_dir" ] || [ ! -f "$nxe_json_dir/config.ngx" ]; then
-    echo "$0: error: nxe-jwx requires nxe-json (>= v0.1.0)." \
+    echo "$0: error: nxe-jwx requires nxe-json." \
          "Set \$nxe_json_dir before sourcing this file." >&2
     exit 1
 fi
