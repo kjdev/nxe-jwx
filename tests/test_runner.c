@@ -368,10 +368,13 @@ TEST(decode_ok){
     s = nxe_jwx_token_alg(t);
     ASSERT(s != NULL);
     ASSERT_STR_EQ(s, "RS256");
+    /* data is NUL-terminated (inherited from nxe_json_string contract) */
+    ASSERT(s->data[s->len] == '\0');
 
     s = nxe_jwx_token_kid(t);
     ASSERT(s != NULL);
     ASSERT_STR_EQ(s, "k1");
+    ASSERT(s->data[s->len] == '\0');
 
     header = nxe_jwx_token_header(t);
     ASSERT(header != NULL);
