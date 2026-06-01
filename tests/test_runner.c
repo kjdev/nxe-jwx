@@ -714,6 +714,42 @@ TEST(jwks_rsa_ok){
     return 0;
 }
 
+TEST(jwks_free_explicit){
+    /*
+     * Explicit release must free the OpenSSL key material immediately
+     * and disarm the pool cleanup handler so the per-test pool teardown
+     * (run by the harness on return) does not double-free.  ASan /
+     * Valgrind enforce the no-double-free contract here.  A redundant
+     * second nxe_jwx_jwks_free must be a harmless no-op.
+     */
+    EVP_PKEY *pkey;
+    ngx_str_t jwk, doc;
+    nxe_jwx_jwks_t *jwks;
+
+    pkey = test_gen_rsa(2048);
+    ASSERT(pkey != NULL);
+    jwk = test_jwk_rsa(pkey, "rk", "RS256", pool);
+    ASSERT(jwk.len > 0);
+    doc = test_jwks_build(&jwk, 1, pool);
+    ASSERT(doc.len > 0);
+
+    jwks = nxe_jwx_jwks_parse(&doc, pool);
+    ASSERT(jwks != NULL);
+    ASSERT_EQ_INT(nxe_jwx_jwks_count(jwks), 1);
+
+    nxe_jwx_jwks_free(jwks);
+    nxe_jwx_jwks_free(jwks);
+
+    EVP_PKEY_free(pkey);
+    return 0;
+}
+
+TEST(jwks_free_null){
+    /* Documented NULL no-op. */
+    nxe_jwx_jwks_free(NULL);
+    return 0;
+}
+
 TEST(jwks_rsa_modulus_too_small){
     EVP_PKEY *pkey;
     ngx_str_t jwk, doc;
@@ -2338,6 +2374,8 @@ main(void)
     RUN(jwks_keys_entry_not_object);
     RUN(jwks_too_many_keys);
     RUN(jwks_rsa_ok);
+    RUN(jwks_free_explicit);
+    RUN(jwks_free_null);
     RUN(jwks_rsa_modulus_too_small);
     RUN(jwks_rsa_modulus_too_large);
     RUN(jwks_rsa_missing_n);
