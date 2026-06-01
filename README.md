@@ -30,6 +30,7 @@ JWT / JWS / JWKS library for nginx modules
 | `nxe_jwx_jwks_parse` | Parse a JWKS document |
 | `nxe_jwx_jwks_parse_keyval` | Parse a keyval-style JSON map (`{"kid": "<PEM>", ...}`; PEM public keys only) |
 | `nxe_jwx_jwks_count` | Number of usable keys in a keyset |
+| `nxe_jwx_jwks_free` | Release a keyset early (frees `EVP_PKEY`s, disarms the pool cleanup) |
 | `nxe_jwx_jws_verify` | Verify a token against a keyset |
 | `nxe_jwx_claims_get_*` | Typed accessors for top-level claims |
 
@@ -84,6 +85,13 @@ policy.
   cleanse step.  This is a deliberate design boundary: callers
   handling sensitive PII are expected to keep the JWT pool
   short-lived so the entire allocation goes away with it.
+- A parsed keyset registers a pool cleanup handler, so its `EVP_PKEY`
+  objects are released automatically when the pool is destroyed. When
+  the keyset lives on a long-lived pool that is *not* torn down on a
+  predictable schedule (e.g. an nginx master-process pool that survives
+  config reloads), call `nxe_jwx_jwks_free()` to release the key
+  material early; it also disarms the registered cleanup so the eventual
+  pool teardown does not double-free.
 
 ## Integration
 
