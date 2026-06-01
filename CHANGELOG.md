@@ -1,5 +1,19 @@
 # Changelog
 
+## [aa7f761](../../commit/aa7f761) - 2026-06-01
+
+### Added
+
+- Add `nxe_jwx_jwks_free()` for explicit keyset release
+  - Keysets previously freed their `EVP_PKEY` objects only via a pool
+    cleanup handler, so a keyset on a long-lived pool that is not torn
+    down on a predictable schedule (e.g. an nginx master-process pool
+    surviving config reloads) leaked the key material on every reload
+  - The new entry point releases the OpenSSL key material immediately
+    and disarms the registered cleanup (`cln->handler = NULL`) so the
+    eventual pool teardown does not double-free; the cleanup body is
+    idempotent, so redundant calls and `NULL` are harmless
+
 ## [9f35dad](../../commit/9f35dad) - 2026-05-29
 
 ### Changed
