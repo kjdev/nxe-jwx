@@ -68,6 +68,31 @@ nxe_jwx_jwks_t *nxe_jwx_jwks_parse_keyval(const ngx_str_t *keyval_json,
     ngx_pool_t *pool);
 
 
+/*
+ * Release all resources owned by `jwks` (EVP_PKEY objects and any
+ * cleansed HMAC secrets) and disarm the pool cleanup handler that
+ * nxe_jwx_jwks_parse / nxe_jwx_jwks_parse_keyval registered, so the
+ * eventual pool teardown does not double-free.  Passing NULL is a
+ * no-op; calling it more than once on the same handle is harmless.
+ *
+ * Two release patterns are therefore supported:
+ *   - Pool-driven (legacy): do nothing and let ngx_destroy_pool run the
+ *     registered cleanup.  Sufficient when the keyset's pool is torn
+ *     down on a predictable schedule (e.g. a per-request or per-cycle
+ *     pool).
+ *   - Explicit: call nxe_jwx_jwks_free when the keyset must be released
+ *     before its pool is destroyed -- e.g. a long-lived master-process
+ *     pool that survives config reloads, where leaving the EVP_PKEY
+ *     objects to pool teardown would leak them across every reload.
+ *
+ * The pool-owned bookkeeping (keys array and the kid/alg/crv copies) is
+ * not individually freed; it is reclaimed when the parent pool is
+ * destroyed.  After this call `jwks` MUST NOT be passed to any other
+ * nxe_jwx_jwks_* / nxe_jwx_jws_* function.
+ */
+void nxe_jwx_jwks_free(nxe_jwx_jwks_t *jwks);
+
+
 /* Number of usable keys held by the keyset. */
 ngx_uint_t nxe_jwx_jwks_count(const nxe_jwx_jwks_t *jwks);
 

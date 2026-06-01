@@ -49,6 +49,13 @@
 struct nxe_jwx_jwks_s {
     struct nxe_jwx_key_s *keys;     /* allocated on pool */
     ngx_uint_t            nkeys;
+
+    /*
+     * Pool cleanup handle registered by nxe_jwx_jwks_alloc.  Retained
+     * so nxe_jwx_jwks_free can disarm it (handler := NULL) and release
+     * the key material early without the pool teardown double-freeing.
+     */
+    ngx_pool_cleanup_t *cln;
 };
 
 
@@ -226,6 +233,36 @@ nxe_jwx_jwks_cleanup(void *data)
         }
 #endif
     }
+}
+
+
+void
+nxe_jwx_jwks_free(nxe_jwx_jwks_t *jwks)
+{
+    if (jwks == NULL) {
+        return;
+    }
+
+    /*
+     * Disarm the pool cleanup handler before releasing the keys so the
+     * eventual pool teardown becomes a no-op for this keyset.  nginx's
+     * ngx_destroy_pool only invokes handlers that are non-NULL, so a
+     * NULL handler is the supported way to cancel a registered cleanup
+     * (the cleanup chain itself cannot be edited via the pool API).
+     */
+    if (jwks->cln != NULL) {
+        jwks->cln->handler = NULL;
+    }
+
+    /*
+     * Release the OpenSSL key material now.  nxe_jwx_jwks_cleanup is
+     * idempotent (it NULLs each pkey and zeroes each secret length), so
+     * a redundant call -- whether from a second nxe_jwx_jwks_free or a
+     * cleanup handler that was somehow still armed -- is harmless.  The
+     * pool-owned bookkeeping (keys array, kid/alg/crv copies) is left in
+     * place; it is reclaimed when the parent pool is destroyed.
+     */
+    nxe_jwx_jwks_cleanup(jwks);
 }
 
 
@@ -791,6 +828,7 @@ nxe_jwx_jwks_alloc(ngx_pool_t *pool, ngx_uint_t capacity)
     }
     cln->handler = nxe_jwx_jwks_cleanup;
     cln->data = jwks;
+    jwks->cln = cln;
 
     return jwks;
 }
