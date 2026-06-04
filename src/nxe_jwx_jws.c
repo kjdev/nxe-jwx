@@ -2,17 +2,22 @@
  * Copyright (c) Tatsuya Kamijo
  * Copyright (c) Bengo4.com, Inc.
  *
- * nxe_jwx_jws.c - JWS signature verification
+ * nxe_jwx_jws.c - JWS signature generation and verification
  *
  * Algorithm policy:
  *   - "none" is rejected unconditionally.
  *   - HS256/384/512 are rejected unless built with NXE_JWX_HAVE_HMAC.
  *
- * Key selection:
+ * Key selection (verify):
  *   - If the token has a kid, keys with a matching kid are tried first.
  *   - Then all keys whose kty/alg are compatible with the token's alg
  *     are tried.
  *   - The first key that produces a valid signature wins.
+ *
+ * Issuing (nxe_jwx_encode) is the symmetric counterpart of verify: it
+ * shares the algorithm table and the ECDSA R||S <-> DER conversion,
+ * signs "<b64url header>.<b64url payload>" with the supplied key, and
+ * assembles the compact JWS.
  */
 
 #include <ngx_config.h>
@@ -25,7 +30,10 @@
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
 #include <openssl/objects.h>
+#include <openssl/pem.h>
 #include <openssl/rsa.h>
+
+#include <nxe_json.h>
 
 #include "nxe_jwx.h"
 #include "nxe_jwx_internal.h"
@@ -598,4 +606,522 @@ nxe_jwx_jws_verify(const nxe_jwx_token_t *token, const nxe_jwx_jwks_t *jwks,
     }
 
     return NGX_DECLINED;
+}
+
+
+/* === Issuing (nxe_jwx_encode) === */
+
+/*
+ * Base64url-encode `src` into a pool buffer (URL-safe alphabet, no
+ * padding -- the form JWS requires).  ngx_encode_base64url sets
+ * dst->len to the actual encoded length.
+ */
+static ngx_int_t
+nxe_jwx_encode_b64url(ngx_str_t *dst, const ngx_str_t *src, ngx_pool_t *pool)
+{
+    ngx_str_t src_mut;
+
+    dst->data = ngx_pnalloc(pool, ngx_base64_encoded_length(src->len));
+    if (dst->data == NULL) {
+        return NGX_ERROR;
+    }
+    dst->len = 0;
+
+    /* ngx_encode_base64url takes a non-const ngx_str_t * for src. */
+    src_mut.data = src->data;
+    src_mut.len = src->len;
+
+    ngx_encode_base64url(dst, &src_mut);
+    return NGX_OK;
+}
+
+
+/*
+ * Convert OpenSSL's DER ECDSA-Sig-Value into the fixed-width R||S
+ * concatenation that JWS requires.  This is the inverse of
+ * nxe_jwx_ecdsa_raw_to_der.  Returns a pool-allocated buffer in *raw;
+ * NGX_ERROR on any structural failure.
+ */
+static ngx_int_t
+nxe_jwx_ecdsa_der_to_raw(const ngx_str_t *der, size_t coord_len,
+    ngx_str_t *raw, ngx_pool_t *pool)
+{
+    ECDSA_SIG *sig;
+    const BIGNUM *r, *s;
+    const u_char *p;
+    ngx_int_t rc = NGX_ERROR;
+
+    raw->data = NULL;
+    raw->len = 0;
+
+    p = der->data;
+    sig = d2i_ECDSA_SIG(NULL, &p, (long) der->len);
+    if (sig == NULL) {
+        return NGX_ERROR;
+    }
+
+    ECDSA_SIG_get0(sig, &r, &s);
+
+    raw->data = ngx_pnalloc(pool, coord_len * 2);
+    if (raw->data == NULL) {
+        goto out;
+    }
+
+    /*
+     * BN_bn2binpad left-pads each component to coord_len bytes and
+     * returns -1 if the value does not fit.  A short-fall would mean
+     * the curve and coord_len disagree, so treat anything other than
+     * an exact coord_len write as a hard error.
+     */
+    if (BN_bn2binpad(r, raw->data, (int) coord_len) != (int) coord_len
+        || BN_bn2binpad(s, raw->data + coord_len, (int) coord_len)
+        != (int) coord_len)
+    {
+        goto out;
+    }
+    raw->len = coord_len * 2;
+    rc = NGX_OK;
+
+out:
+    ECDSA_SIG_free(sig);
+    return rc;
+}
+
+
+/*
+ * Sign `signing_input` with `pkey` using `digest` (or NULL for EdDSA),
+ * producing a pool-allocated signature in *sig.  When `pss` is set the
+ * PSS parameters mirror the verify path (MGF1 = digest, salt = digest
+ * length).  For ECDSA keys the signature is DER-encoded here; the
+ * caller converts it to the JWS R||S form.
+ *
+ * Returns NGX_OK / NGX_ERROR.
+ */
+static ngx_int_t
+nxe_jwx_evp_sign(EVP_PKEY *pkey, const char *digest_name,
+    const ngx_str_t *signing_input, ngx_flag_t pss, ngx_str_t *sig,
+    ngx_pool_t *pool)
+{
+    EVP_MD_CTX *ctx;
+    EVP_PKEY_CTX *pctx = NULL;
+    const EVP_MD *md = NULL;
+    size_t sig_len = 0;
+    ngx_int_t rc = NGX_ERROR;
+
+    sig->data = NULL;
+    sig->len = 0;
+
+    if (digest_name != NULL) {
+        md = EVP_get_digestbyname(digest_name);
+        if (md == NULL) {
+            return NGX_ERROR;
+        }
+    }
+
+    ctx = EVP_MD_CTX_new();
+    if (ctx == NULL) {
+        return NGX_ERROR;
+    }
+
+    if (EVP_DigestSignInit(ctx, &pctx, md, NULL, pkey) != 1) {
+        goto out;
+    }
+
+    if (pss) {
+        if (EVP_PKEY_CTX_set_rsa_padding(pctx, RSA_PKCS1_PSS_PADDING) <= 0
+            || EVP_PKEY_CTX_set_rsa_pss_saltlen(pctx, RSA_PSS_SALTLEN_DIGEST)
+            <= 0
+            || EVP_PKEY_CTX_set_rsa_mgf1_md(pctx, md) <= 0)
+        {
+            goto out;
+        }
+    }
+
+    /*
+     * EVP_DigestSign is the single-shot form for both digest-based
+     * algorithms (RSA / RSA-PSS / ECDSA) and EdDSA.  The first call
+     * sizes the signature; the second produces it.
+     */
+    if (EVP_DigestSign(ctx, NULL, &sig_len, signing_input->data,
+                       signing_input->len) != 1)
+    {
+        goto out;
+    }
+    sig->data = ngx_pnalloc(pool, sig_len);
+    if (sig->data == NULL) {
+        goto out;
+    }
+    if (EVP_DigestSign(ctx, sig->data, &sig_len, signing_input->data,
+                       signing_input->len) != 1)
+    {
+        sig->data = NULL;
+        goto out;
+    }
+    sig->len = sig_len;
+    rc = NGX_OK;
+
+out:
+    EVP_MD_CTX_free(ctx);
+    return rc;
+}
+
+
+#if (NXE_JWX_HAVE_HMAC)
+/*
+ * HMAC-sign `signing_input` into a pool buffer.  No constant-time
+ * handling is needed on the issuing side; the transient MAC buffer is
+ * cleansed before returning.
+ */
+static ngx_int_t
+nxe_jwx_hmac_sign(const ngx_str_t *secret, const char *digest_name,
+    const ngx_str_t *signing_input, ngx_str_t *mac, ngx_pool_t *pool)
+{
+    const EVP_MD *md;
+    u_char tmp[EVP_MAX_MD_SIZE];
+    unsigned int tmp_len = 0;
+
+    mac->data = NULL;
+    mac->len = 0;
+
+    md = EVP_get_digestbyname(digest_name);
+    if (md == NULL) {
+        return NGX_ERROR;
+    }
+
+    if (HMAC(md, secret->data, (int) secret->len,
+             signing_input->data, signing_input->len,
+             tmp, &tmp_len) == NULL)
+    {
+        return NGX_ERROR;
+    }
+
+    mac->data = ngx_pnalloc(pool, tmp_len);
+    if (mac->data == NULL) {
+        OPENSSL_cleanse(tmp, sizeof(tmp));
+        return NGX_ERROR;
+    }
+    ngx_memcpy(mac->data, tmp, tmp_len);
+    mac->len = tmp_len;
+
+    OPENSSL_cleanse(tmp, sizeof(tmp));
+    return NGX_OK;
+}
+#endif
+
+
+/*
+ * Load a PEM-encoded private key into an EVP_PKEY.  Returns NULL when
+ * the bytes are not a valid PEM private key.
+ */
+static EVP_PKEY *
+nxe_jwx_load_pem_privkey(const ngx_str_t *pem)
+{
+    BIO *bio;
+    EVP_PKEY *pkey;
+
+    bio = BIO_new_mem_buf(pem->data, (int) pem->len);
+    if (bio == NULL) {
+        return NULL;
+    }
+    pkey = PEM_read_bio_PrivateKey(bio, NULL, NULL, NULL);
+    BIO_free(bio);
+    return pkey;
+}
+
+
+/*
+ * Confirm the loaded private key matches the requested algorithm family
+ * (and, for ECDSA, the algorithm's curve).  A mismatch is the issuing-
+ * side equivalent of "wrong key" and is reported as an error.
+ */
+static ngx_flag_t
+nxe_jwx_privkey_compatible(EVP_PKEY *pkey, const nxe_jwx_alg_t *alg)
+{
+    int pkey_id = EVP_PKEY_base_id(pkey);
+
+    switch (alg->family) {
+    case NXE_JWX_ALG_FAMILY_RSA:
+    case NXE_JWX_ALG_FAMILY_RSA_PSS:
+        return (pkey_id == EVP_PKEY_RSA || pkey_id == EVP_PKEY_RSA_PSS)
+            ? 1 : 0;
+
+    case NXE_JWX_ALG_FAMILY_ECDSA:
+        if (pkey_id != EVP_PKEY_EC) {
+            return 0;
+        }
+        return (alg->ec_curve != NULL
+                && nxe_jwx_ec_curve_matches(pkey, alg->ec_curve)) ? 1 : 0;
+
+    case NXE_JWX_ALG_FAMILY_EDDSA:
+        return (pkey_id == EVP_PKEY_ED25519 || pkey_id == EVP_PKEY_ED448)
+            ? 1 : 0;
+
+#if (NXE_JWX_HAVE_HMAC)
+    case NXE_JWX_ALG_FAMILY_HMAC:
+        /* HMAC does not use an EVP_PKEY; handled before this point. */
+        return 0;
+#endif
+    }
+
+    return 0;
+}
+
+
+/*
+ * Validate that `claims` parses as a JSON object.  This keeps the
+ * issuing path fail-closed: a malformed or non-object payload is
+ * refused instead of being base64url-wrapped into a structurally
+ * broken token.
+ */
+static ngx_int_t
+nxe_jwx_validate_claims_object(const ngx_str_t *claims, ngx_pool_t *pool)
+{
+    nxe_json_t *json;
+    ngx_str_t input;
+
+    input.data = claims->data;
+    input.len = claims->len;
+
+    json = nxe_json_parse_untrusted(&input, pool);
+    if (json == NULL) {
+        return NGX_ERROR;
+    }
+    if (nxe_json_type(json) != NXE_JSON_OBJECT) {
+        nxe_json_free(json);
+        return NGX_ERROR;
+    }
+    nxe_json_free(json);
+    return NGX_OK;
+}
+
+
+/*
+ * Build the JWS protected header JSON:
+ *
+ *     {"alg":"<name>","typ":"JWT"}
+ *
+ * with an optional ,"kid":<escaped> inserted before the closing brace.
+ * `alg_name` comes from the trusted algorithm table (safe ASCII, no
+ * escaping needed); the kid is JSON-escaped via nxe-json so an
+ * operator-supplied value cannot inject extra header parameters.
+ */
+static ngx_int_t
+nxe_jwx_build_header(const char *alg_name, const ngx_str_t *kid,
+    ngx_str_t *header, ngx_pool_t *pool)
+{
+    static const char start[] = "{\"alg\":\"";
+    static const char mid[] = "\",\"typ\":\"JWT\"";
+    static const char kidkey[] = ",\"kid\":";
+    static const char end[] = "}";
+
+    size_t alg_len = ngx_strlen(alg_name);
+    ngx_str_t *kid_quoted = NULL;
+    size_t total;
+    u_char *p;
+
+    if (kid != NULL && kid->len > 0) {
+        nxe_json_t *node;
+        ngx_str_t kid_mut;
+
+        kid_mut.data = kid->data;
+        kid_mut.len = kid->len;
+
+        /*
+         * nxe_json_from_string + stringify_compact yields the kid as a
+         * properly JSON-escaped, double-quoted string ("...") that we
+         * splice in verbatim after the "kid": key.
+         */
+        node = nxe_json_from_string(&kid_mut);
+        if (node == NULL) {
+            return NGX_ERROR;
+        }
+        kid_quoted = nxe_json_stringify_compact(node, pool);
+        nxe_json_free(node);
+        if (kid_quoted == NULL) {
+            return NGX_ERROR;
+        }
+    }
+
+    total = sizeof(start) - 1 + alg_len + sizeof(mid) - 1 + sizeof(end) - 1;
+    if (kid_quoted != NULL) {
+        total += sizeof(kidkey) - 1 + kid_quoted->len;
+    }
+
+    header->data = ngx_pnalloc(pool, total);
+    if (header->data == NULL) {
+        return NGX_ERROR;
+    }
+    p = header->data;
+    ngx_memcpy(p, start, sizeof(start) - 1); p += sizeof(start) - 1;
+    ngx_memcpy(p, alg_name, alg_len); p += alg_len;
+    ngx_memcpy(p, mid, sizeof(mid) - 1); p += sizeof(mid) - 1;
+    if (kid_quoted != NULL) {
+        ngx_memcpy(p, kidkey, sizeof(kidkey) - 1); p += sizeof(kidkey) - 1;
+        ngx_memcpy(p, kid_quoted->data, kid_quoted->len);
+        p += kid_quoted->len;
+    }
+    ngx_memcpy(p, end, sizeof(end) - 1); p += sizeof(end) - 1;
+    header->len = (size_t) (p - header->data);
+
+    return NGX_OK;
+}
+
+
+ngx_int_t
+nxe_jwx_encode(ngx_pool_t *pool, const ngx_str_t *alg, const ngx_str_t *kid,
+    const ngx_str_t *claims, const ngx_str_t *key, ngx_str_t *out)
+{
+    const nxe_jwx_alg_t *a;
+    ngx_log_t *log;
+    ngx_str_t header_json, header_b64, payload_b64, signing_input;
+    ngx_str_t sig_raw = { 0, NULL };
+    ngx_str_t sig_b64;
+    EVP_PKEY *pkey = NULL;
+    ngx_int_t rc = NGX_ERROR;
+    u_char *p;
+
+    if (pool == NULL || alg == NULL || claims == NULL || key == NULL
+        || out == NULL
+        || alg->len == 0 || claims->len == 0 || key->len == 0)
+    {
+        return NGX_ERROR;
+    }
+    log = nxe_jwx_log(pool);
+
+    out->data = NULL;
+    out->len = 0;
+
+    if (claims->len > NXE_JWX_MAX_JWT_SIZE) {
+        ngx_log_error(NGX_LOG_ERR, log, 0,
+                      "nxe_jwx: encode claims exceed %ui bytes",
+                      (ngx_uint_t) NXE_JWX_MAX_JWT_SIZE);
+        return NGX_ERROR;
+    }
+
+    /* Reject "none" before any other policy check, regardless of build
+     * flags (mirrors the verify side). */
+    if (alg->len == 4 && ngx_strncmp(alg->data, "none", 4) == 0) {
+        ngx_log_error(NGX_LOG_ERR, log, 0,
+                      "nxe_jwx: 'none' algorithm rejected for encode");
+        return NGX_ERROR;
+    }
+
+    a = nxe_jwx_lookup_alg(alg);
+    if (a == NULL) {
+        /* Unsupported alg, including HS* when HMAC is disabled at
+         * compile time. */
+        ngx_log_error(NGX_LOG_ERR, log, 0,
+                      "nxe_jwx: encode alg \"%V\" is not supported", alg);
+        return NGX_ERROR;
+    }
+
+    if (nxe_jwx_validate_claims_object(claims, pool) != NGX_OK) {
+        ngx_log_error(NGX_LOG_ERR, log, 0,
+                      "nxe_jwx: encode claims are not a JSON object");
+        return NGX_ERROR;
+    }
+
+    if (nxe_jwx_build_header(a->name, kid, &header_json, pool) != NGX_OK) {
+        return NGX_ERROR;
+    }
+
+    if (nxe_jwx_encode_b64url(&header_b64, &header_json, pool) != NGX_OK
+        || nxe_jwx_encode_b64url(&payload_b64, claims, pool) != NGX_OK)
+    {
+        return NGX_ERROR;
+    }
+
+    /* signing_input = header_b64 "." payload_b64 */
+    signing_input.len = header_b64.len + 1 + payload_b64.len;
+    signing_input.data = ngx_pnalloc(pool, signing_input.len);
+    if (signing_input.data == NULL) {
+        return NGX_ERROR;
+    }
+    p = signing_input.data;
+    ngx_memcpy(p, header_b64.data, header_b64.len); p += header_b64.len;
+    *p++ = '.';
+    ngx_memcpy(p, payload_b64.data, payload_b64.len);
+
+    /* Produce the raw signature bytes for the algorithm family. */
+    switch (a->family) {
+
+#if (NXE_JWX_HAVE_HMAC)
+    case NXE_JWX_ALG_FAMILY_HMAC:
+        if (nxe_jwx_hmac_sign(key, a->digest, &signing_input, &sig_raw, pool)
+            != NGX_OK)
+        {
+            goto out;
+        }
+        break;
+#endif
+
+    case NXE_JWX_ALG_FAMILY_ECDSA:
+    {
+        ngx_str_t der;
+
+        pkey = nxe_jwx_load_pem_privkey(key);
+        if (pkey == NULL || !nxe_jwx_privkey_compatible(pkey, a)) {
+            goto out;
+        }
+        if (nxe_jwx_evp_sign(pkey, a->digest, &signing_input, 0, &der, pool)
+            != NGX_OK)
+        {
+            goto out;
+        }
+        if (nxe_jwx_ecdsa_der_to_raw(&der, a->ec_coord_len, &sig_raw, pool)
+            != NGX_OK)
+        {
+            goto out;
+        }
+        break;
+    }
+
+    case NXE_JWX_ALG_FAMILY_RSA:
+    case NXE_JWX_ALG_FAMILY_RSA_PSS:
+    case NXE_JWX_ALG_FAMILY_EDDSA:
+        pkey = nxe_jwx_load_pem_privkey(key);
+        if (pkey == NULL || !nxe_jwx_privkey_compatible(pkey, a)) {
+            goto out;
+        }
+        if (nxe_jwx_evp_sign(pkey, a->digest, &signing_input,
+                             a->family == NXE_JWX_ALG_FAMILY_RSA_PSS,
+                             &sig_raw, pool) != NGX_OK)
+        {
+            goto out;
+        }
+        break;
+
+    default:
+        goto out;
+    }
+
+    if (nxe_jwx_encode_b64url(&sig_b64, &sig_raw, pool) != NGX_OK) {
+        goto out;
+    }
+
+    /* out = signing_input "." sig_b64, NUL-terminated. */
+    out->len = signing_input.len + 1 + sig_b64.len;
+    out->data = ngx_pnalloc(pool, out->len + 1);
+    if (out->data == NULL) {
+        out->len = 0;
+        goto out;
+    }
+    p = out->data;
+    ngx_memcpy(p, signing_input.data, signing_input.len);
+    p += signing_input.len;
+    *p++ = '.';
+    ngx_memcpy(p, sig_b64.data, sig_b64.len); p += sig_b64.len;
+    *p = '\0';
+
+    rc = NGX_OK;
+
+out:
+    if (pkey != NULL) {
+        EVP_PKEY_free(pkey);
+    }
+    if (rc != NGX_OK) {
+        out->data = NULL;
+        out->len = 0;
+    }
+    return rc;
 }

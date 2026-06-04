@@ -2,7 +2,7 @@
  * Copyright (c) Tatsuya Kamijo
  * Copyright (c) Bengo4.com, Inc.
  *
- * nxe_jwx_jws.h - JWS signature verification
+ * nxe_jwx_jws.h - JWS signature generation and verification
  */
 
 #ifndef _NXE_JWX_JWS_H_INCLUDED_
@@ -65,6 +65,50 @@
  */
 ngx_int_t nxe_jwx_jws_verify(const nxe_jwx_token_t *token,
     const nxe_jwx_jwks_t *jwks, ngx_pool_t *pool);
+
+
+/*
+ * Build a signed compact JWS (JWT):
+ *
+ *     "<b64url header>.<b64url payload>.<b64url signature>"
+ *
+ * This is the issuing counterpart of nxe_jwx_jws_verify(); the two
+ * share the algorithm table and the ECDSA R||S <-> DER conversion.
+ *
+ * Arguments:
+ *   pool    allocation pool for `out` and all intermediates.
+ *   alg     "HS256"/"HS384"/"HS512" (only with NXE_JWX_HAVE_HMAC),
+ *           "RS256"/"384"/"512", "PS256"/"384"/"512",
+ *           "ES256"/"384"/"512"/"ES256K", "EdDSA".  "none" is ALWAYS
+ *           rejected, regardless of build flags (mirrors the verify
+ *           policy).
+ *   kid     optional; when its len > 0 it is emitted as the "kid"
+ *           header parameter (JSON-escaped).  Pass NULL or a zero-
+ *           length ngx_str_t to omit it.
+ *   claims  caller-serialised compact JSON OBJECT used verbatim as the
+ *           payload.  The caller owns escaping its contents; the
+ *           encoder only checks that the bytes parse as a JSON object.
+ *   key     HMAC secret bytes for HS*, or a PEM-encoded PRIVATE key for
+ *           the asymmetric families.
+ *   out     receives the compact JWS, pool-allocated and NUL-terminated
+ *           (out->data[out->len] == '\0', matching the token-string
+ *           contract).
+ *
+ * The header always carries "typ":"JWT" in addition to "alg" (and the
+ * optional "kid").
+ *
+ * Return value:
+ *   NGX_OK     `out` holds the signed token.
+ *   NGX_ERROR  unknown/forbidden alg, key/claims format error, key that
+ *              does not match the alg, or any crypto/allocation failure.
+ *
+ * Unlike the verify side there is no NGX_DECLINED: issuing is performed
+ * by the operator's own code, so failure modes are not an oracle and
+ * collapse to NGX_ERROR.
+ */
+ngx_int_t nxe_jwx_encode(ngx_pool_t *pool, const ngx_str_t *alg,
+    const ngx_str_t *kid, const ngx_str_t *claims, const ngx_str_t *key,
+    ngx_str_t *out);
 
 
 #endif /* _NXE_JWX_JWS_H_INCLUDED_ */
