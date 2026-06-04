@@ -2308,6 +2308,369 @@ TEST(jws_null_args){
 }
 
 
+/* === JWS issuing (nxe_jwx_encode) round-trips === */
+
+/*
+ * Encode `claims` with `alg`/`kid`/`key`, then decode the result and
+ * verify it against `jwks_doc`.  Returns the nxe_jwx_jws_verify status
+ * (NGX_OK on a successful round-trip), or a negative sentinel when an
+ * earlier step fails so the caller's ASSERT pinpoints the stage.
+ */
+static int
+encode_then_verify(ngx_pool_t *pool, const char *alg, const char *kid,
+    const char *claims_json, const ngx_str_t *key, const ngx_str_t *jwks_doc)
+{
+    ngx_str_t alg_s, kid_s = { 0, NULL }, claims_s, out;
+    nxe_jwx_jwks_t *jwks;
+    nxe_jwx_token_t *t;
+
+    alg_s.data = (u_char *) alg;
+    alg_s.len = strlen(alg);
+    claims_s.data = (u_char *) claims_json;
+    claims_s.len = strlen(claims_json);
+    if (kid != NULL) {
+        kid_s.data = (u_char *) kid;
+        kid_s.len = strlen(kid);
+    }
+
+    if (nxe_jwx_encode(pool, &alg_s, kid != NULL ? &kid_s : NULL,
+                       &claims_s, key, &out) != NGX_OK)
+    {
+        return -1;
+    }
+    /* token-string contract: NUL-terminated just past out->len. */
+    if (out.data == NULL || out.data[out.len] != '\0') {
+        return -2;
+    }
+    t = nxe_jwx_decode(&out, pool);
+    if (t == NULL) {
+        return -3;
+    }
+    jwks = nxe_jwx_jwks_parse(jwks_doc, pool);
+    if (jwks == NULL) {
+        return -4;
+    }
+    return (int) nxe_jwx_jws_verify(t, jwks, pool);
+}
+
+
+TEST(encode_rs256_roundtrip){
+    EVP_PKEY *pkey = test_gen_rsa(2048);
+    ngx_str_t priv, jwk, doc;
+
+    ASSERT(pkey != NULL);
+    priv = test_pem_privkey(pkey, pool);
+    ASSERT(priv.len > 0);
+    jwk = test_jwk_rsa(pkey, "k1", NULL, pool);
+    ASSERT(jwk.len > 0);
+    doc = test_jwks_build(&jwk, 1, pool);
+    ASSERT_EQ_INT(encode_then_verify(pool, "RS256", "k1",
+                                     "{\"sub\":\"alice\"}", &priv, &doc),
+                  NGX_OK);
+    EVP_PKEY_free(pkey);
+    return 0;
+}
+
+TEST(encode_ps256_roundtrip){
+    EVP_PKEY *pkey = test_gen_rsa(2048);
+    ngx_str_t priv, jwk, doc;
+
+    ASSERT(pkey != NULL);
+    priv = test_pem_privkey(pkey, pool);
+    ASSERT(priv.len > 0);
+    jwk = test_jwk_rsa(pkey, "k1", NULL, pool);
+    ASSERT(jwk.len > 0);
+    doc = test_jwks_build(&jwk, 1, pool);
+    ASSERT_EQ_INT(encode_then_verify(pool, "PS256", "k1",
+                                     "{\"sub\":\"bob\"}", &priv, &doc),
+                  NGX_OK);
+    EVP_PKEY_free(pkey);
+    return 0;
+}
+
+TEST(encode_es256_roundtrip){
+    EVP_PKEY *pkey = test_gen_ec(NID_X9_62_prime256v1);
+    ngx_str_t priv, jwk, doc;
+
+    ASSERT(pkey != NULL);
+    priv = test_pem_privkey(pkey, pool);
+    ASSERT(priv.len > 0);
+    jwk = test_jwk_ec(pkey, "P-256", 32, "k1", NULL, pool);
+    ASSERT(jwk.len > 0);
+    doc = test_jwks_build(&jwk, 1, pool);
+    ASSERT_EQ_INT(encode_then_verify(pool, "ES256", "k1",
+                                     "{\"sub\":\"carol\"}", &priv, &doc),
+                  NGX_OK);
+    EVP_PKEY_free(pkey);
+    return 0;
+}
+
+TEST(encode_es384_roundtrip){
+    EVP_PKEY *pkey = test_gen_ec(NID_secp384r1);
+    ngx_str_t priv, jwk, doc;
+
+    ASSERT(pkey != NULL);
+    priv = test_pem_privkey(pkey, pool);
+    ASSERT(priv.len > 0);
+    jwk = test_jwk_ec(pkey, "P-384", 48, "k1", NULL, pool);
+    ASSERT(jwk.len > 0);
+    doc = test_jwks_build(&jwk, 1, pool);
+    ASSERT_EQ_INT(encode_then_verify(pool, "ES384", "k1",
+                                     "{\"sub\":\"dave\"}", &priv, &doc),
+                  NGX_OK);
+    EVP_PKEY_free(pkey);
+    return 0;
+}
+
+TEST(encode_eddsa_roundtrip){
+    EVP_PKEY *pkey = test_gen_ed25519();
+    ngx_str_t priv, jwk, doc;
+
+    ASSERT(pkey != NULL);
+    priv = test_pem_privkey(pkey, pool);
+    ASSERT(priv.len > 0);
+    jwk = test_jwk_okp(pkey, "Ed25519", 32, "k1", NULL, pool);
+    ASSERT(jwk.len > 0);
+    doc = test_jwks_build(&jwk, 1, pool);
+    ASSERT_EQ_INT(encode_then_verify(pool, "EdDSA", "k1",
+                                     "{\"sub\":\"erin\"}", &priv, &doc),
+                  NGX_OK);
+    EVP_PKEY_free(pkey);
+    return 0;
+}
+
+TEST(encode_hs256_roundtrip){
+    static const u_char secret[] = "0123456789abcdef0123456789abcdef";
+    ngx_str_t key, jwk, doc;
+
+    key.data = (u_char *) secret;
+    key.len = sizeof(secret) - 1;
+    jwk = test_jwk_oct(secret, sizeof(secret) - 1, "k1", NULL, pool);
+    ASSERT(jwk.len > 0);
+    doc = test_jwks_build(&jwk, 1, pool);
+    ASSERT_EQ_INT(encode_then_verify(pool, "HS256", "k1",
+                                     "{\"sub\":\"frank\"}", &key, &doc),
+                  NGX_OK);
+    return 0;
+}
+
+TEST(encode_no_kid_roundtrip){
+    EVP_PKEY *pkey = test_gen_rsa(2048);
+    ngx_str_t priv, jwk, doc;
+
+    ASSERT(pkey != NULL);
+    priv = test_pem_privkey(pkey, pool);
+    ASSERT(priv.len > 0);
+    /* kid-less JWK so the kid-less token verifies via pass 2. */
+    jwk = test_jwk_rsa(pkey, NULL, NULL, pool);
+    ASSERT(jwk.len > 0);
+    doc = test_jwks_build(&jwk, 1, pool);
+    ASSERT_EQ_INT(encode_then_verify(pool, "RS256", NULL,
+                                     "{\"sub\":\"grace\"}", &priv, &doc),
+                  NGX_OK);
+    EVP_PKEY_free(pkey);
+    return 0;
+}
+
+/* Header carries alg + typ + kid; payload survives verbatim. */
+TEST(encode_header_and_payload){
+    EVP_PKEY *pkey = test_gen_rsa(2048);
+    ngx_str_t priv, alg_s, kid_s, claims_s, out;
+    nxe_jwx_token_t *t;
+    nxe_json_t *header;
+    ngx_str_t typ, sub;
+    const ngx_str_t *got;
+
+    ASSERT(pkey != NULL);
+    priv = test_pem_privkey(pkey, pool);
+    ASSERT(priv.len > 0);
+
+    alg_s.data = (u_char *) "RS256"; alg_s.len = 5;
+    kid_s.data = (u_char *) "my-key"; kid_s.len = 6;
+    claims_s.data = (u_char *) "{\"sub\":\"alice\",\"cid\":\"web\"}";
+    claims_s.len = strlen((char *) claims_s.data);
+
+    ASSERT_EQ_INT(nxe_jwx_encode(pool, &alg_s, &kid_s, &claims_s, &priv, &out),
+                  NGX_OK);
+
+    t = nxe_jwx_decode(&out, pool);
+    ASSERT(t != NULL);
+
+    got = nxe_jwx_token_alg(t);
+    ASSERT(got != NULL);
+    ASSERT_STR_EQ(got, "RS256");
+
+    got = nxe_jwx_token_kid(t);
+    ASSERT(got != NULL);
+    ASSERT_STR_EQ(got, "my-key");
+
+    header = nxe_jwx_token_header(t);
+    ASSERT(header != NULL);
+    ASSERT_EQ_INT(nxe_jwx_claims_get_string(header, "typ", &typ), NGX_OK);
+    ASSERT_STR_EQ(&typ, "JWT");
+
+    ASSERT_EQ_INT(nxe_jwx_claims_get_string(nxe_jwx_token_payload(t),
+                                            "sub", &sub), NGX_OK);
+    ASSERT_STR_EQ(&sub, "alice");
+
+    EVP_PKEY_free(pkey);
+    return 0;
+}
+
+/* kid containing a JSON metacharacter is escaped, not injected. */
+TEST(encode_kid_is_json_escaped){
+    EVP_PKEY *pkey = test_gen_rsa(2048);
+    ngx_str_t priv, alg_s, kid_s, claims_s, out;
+    nxe_jwx_token_t *t;
+    const ngx_str_t *got;
+
+    ASSERT(pkey != NULL);
+    priv = test_pem_privkey(pkey, pool);
+    ASSERT(priv.len > 0);
+
+    alg_s.data = (u_char *) "RS256"; alg_s.len = 5;
+    kid_s.data = (u_char *) "a\"b"; kid_s.len = 3;   /* embedded quote */
+    claims_s.data = (u_char *) "{\"sub\":\"x\"}";
+    claims_s.len = strlen((char *) claims_s.data);
+
+    ASSERT_EQ_INT(nxe_jwx_encode(pool, &alg_s, &kid_s, &claims_s, &priv, &out),
+                  NGX_OK);
+
+    /* The header must still parse (escaping kept it well-formed) and the
+     * kid round-trips with the literal quote intact. */
+    t = nxe_jwx_decode(&out, pool);
+    ASSERT(t != NULL);
+    got = nxe_jwx_token_kid(t);
+    ASSERT(got != NULL);
+    ASSERT_STR_EQ(got, "a\"b");
+
+    EVP_PKEY_free(pkey);
+    return 0;
+}
+
+TEST(encode_alg_none_rejected){
+    ngx_str_t alg_s = ngx_string("none");
+    ngx_str_t key = ngx_string("secret");
+    ngx_str_t claims = ngx_string("{\"sub\":\"x\"}");
+    ngx_str_t out;
+
+    ASSERT_EQ_INT(nxe_jwx_encode(pool, &alg_s, NULL, &claims, &key, &out),
+                  NGX_ERROR);
+    return 0;
+}
+
+TEST(encode_alg_unknown_rejected){
+    ngx_str_t alg_s = ngx_string("FOO");
+    ngx_str_t key = ngx_string("secret");
+    ngx_str_t claims = ngx_string("{\"sub\":\"x\"}");
+    ngx_str_t out;
+
+    ASSERT_EQ_INT(nxe_jwx_encode(pool, &alg_s, NULL, &claims, &key, &out),
+                  NGX_ERROR);
+    return 0;
+}
+
+/* RS256 with an EC private key -> family mismatch -> NGX_ERROR. */
+TEST(encode_key_mismatch_rejected){
+    EVP_PKEY *pkey = test_gen_ec(NID_X9_62_prime256v1);
+    ngx_str_t priv, alg_s, claims, out;
+
+    ASSERT(pkey != NULL);
+    priv = test_pem_privkey(pkey, pool);
+    ASSERT(priv.len > 0);
+    alg_s.data = (u_char *) "RS256"; alg_s.len = 5;
+    claims.data = (u_char *) "{\"sub\":\"x\"}";
+    claims.len = strlen((char *) claims.data);
+
+    ASSERT_EQ_INT(nxe_jwx_encode(pool, &alg_s, NULL, &claims, &priv, &out),
+                  NGX_ERROR);
+    EVP_PKEY_free(pkey);
+    return 0;
+}
+
+/* ES256 expects prime256v1; a P-384 key is the wrong curve -> NGX_ERROR. */
+TEST(encode_ec_curve_mismatch_rejected){
+    EVP_PKEY *pkey = test_gen_ec(NID_secp384r1);
+    ngx_str_t priv, alg_s, claims, out;
+
+    ASSERT(pkey != NULL);
+    priv = test_pem_privkey(pkey, pool);
+    ASSERT(priv.len > 0);
+    alg_s.data = (u_char *) "ES256"; alg_s.len = 5;
+    claims.data = (u_char *) "{\"sub\":\"x\"}";
+    claims.len = strlen((char *) claims.data);
+
+    ASSERT_EQ_INT(nxe_jwx_encode(pool, &alg_s, NULL, &claims, &priv, &out),
+                  NGX_ERROR);
+    EVP_PKEY_free(pkey);
+    return 0;
+}
+
+/* A bad PEM that is not a private key at all -> NGX_ERROR. */
+TEST(encode_bad_pem_rejected){
+    ngx_str_t alg_s = ngx_string("RS256");
+    ngx_str_t key = ngx_string("-----BEGIN PRIVATE KEY-----\nnot-base64\n"
+                               "-----END PRIVATE KEY-----\n");
+    ngx_str_t claims = ngx_string("{\"sub\":\"x\"}");
+    ngx_str_t out;
+
+    ASSERT_EQ_INT(nxe_jwx_encode(pool, &alg_s, NULL, &claims, &key, &out),
+                  NGX_ERROR);
+    return 0;
+}
+
+TEST(encode_claims_not_object_rejected){
+    ngx_str_t alg_s = ngx_string("HS256");
+    ngx_str_t key = ngx_string("0123456789abcdef0123456789abcdef");
+    ngx_str_t out;
+    ngx_str_t s_claims = ngx_string("\"hello\"");
+    ngx_str_t a_claims = ngx_string("[1,2,3]");
+
+    ASSERT_EQ_INT(nxe_jwx_encode(pool, &alg_s, NULL, &s_claims, &key, &out),
+                  NGX_ERROR);
+    ASSERT_EQ_INT(nxe_jwx_encode(pool, &alg_s, NULL, &a_claims, &key, &out),
+                  NGX_ERROR);
+    return 0;
+}
+
+TEST(encode_claims_invalid_json_rejected){
+    ngx_str_t alg_s = ngx_string("HS256");
+    ngx_str_t key = ngx_string("0123456789abcdef0123456789abcdef");
+    ngx_str_t claims = ngx_string("{bad");
+    ngx_str_t out;
+
+    ASSERT_EQ_INT(nxe_jwx_encode(pool, &alg_s, NULL, &claims, &key, &out),
+                  NGX_ERROR);
+    return 0;
+}
+
+TEST(encode_null_args_rejected){
+    ngx_str_t alg_s = ngx_string("HS256");
+    ngx_str_t key = ngx_string("0123456789abcdef0123456789abcdef");
+    ngx_str_t claims = ngx_string("{\"sub\":\"x\"}");
+    ngx_str_t empty = { 0, NULL };
+    ngx_str_t out;
+
+    ASSERT_EQ_INT(nxe_jwx_encode(NULL, &alg_s, NULL, &claims, &key, &out),
+                  NGX_ERROR);
+    ASSERT_EQ_INT(nxe_jwx_encode(pool, NULL, NULL, &claims, &key, &out),
+                  NGX_ERROR);
+    ASSERT_EQ_INT(nxe_jwx_encode(pool, &alg_s, NULL, NULL, &key, &out),
+                  NGX_ERROR);
+    ASSERT_EQ_INT(nxe_jwx_encode(pool, &alg_s, NULL, &claims, NULL, &out),
+                  NGX_ERROR);
+    ASSERT_EQ_INT(nxe_jwx_encode(pool, &alg_s, NULL, &claims, &key, NULL),
+                  NGX_ERROR);
+    ASSERT_EQ_INT(nxe_jwx_encode(pool, &empty, NULL, &claims, &key, &out),
+                  NGX_ERROR);
+    ASSERT_EQ_INT(nxe_jwx_encode(pool, &alg_s, NULL, &empty, &key, &out),
+                  NGX_ERROR);
+    ASSERT_EQ_INT(nxe_jwx_encode(pool, &alg_s, NULL, &claims, &empty, &out),
+                  NGX_ERROR);
+    return 0;
+}
+
+
 /* === main === */
 
 int
@@ -2451,6 +2814,25 @@ main(void)
     RUN(jws_ec_curve_mismatch);
     RUN(jws_es256_bad_sig_length);
     RUN(jws_null_args);
+
+    /* encode (issuing) */
+    RUN(encode_rs256_roundtrip);
+    RUN(encode_ps256_roundtrip);
+    RUN(encode_es256_roundtrip);
+    RUN(encode_es384_roundtrip);
+    RUN(encode_eddsa_roundtrip);
+    RUN(encode_hs256_roundtrip);
+    RUN(encode_no_kid_roundtrip);
+    RUN(encode_header_and_payload);
+    RUN(encode_kid_is_json_escaped);
+    RUN(encode_alg_none_rejected);
+    RUN(encode_alg_unknown_rejected);
+    RUN(encode_key_mismatch_rejected);
+    RUN(encode_ec_curve_mismatch_rejected);
+    RUN(encode_bad_pem_rejected);
+    RUN(encode_claims_not_object_rejected);
+    RUN(encode_claims_invalid_json_rejected);
+    RUN(encode_null_args_rejected);
 
     printf("\n%d passed, %d failed\n", g_passed, g_failed);
     return g_failed == 0 ? 0 : 1;

@@ -143,6 +143,44 @@ ngx_decode_base64url(ngx_str_t *dst, ngx_str_t *src)
 }
 
 
+/*
+ * base64url encoder.  URL-safe alphabet, no '=' padding -- matches the
+ * production ngx_encode_base64url (basis64url, padding disabled), which
+ * is the form JWS compact serialization expects.
+ */
+void
+ngx_encode_base64url(ngx_str_t *dst, ngx_str_t *src)
+{
+    static const char alphabet[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+    u_char *s = src->data;
+    u_char *d = dst->data;
+    size_t len = src->len;
+
+    while (len >= 3) {
+        *d++ = (u_char) alphabet[s[0] >> 2];
+        *d++ = (u_char) alphabet[((s[0] & 0x03) << 4) | (s[1] >> 4)];
+        *d++ = (u_char) alphabet[((s[1] & 0x0f) << 2) | (s[2] >> 6)];
+        *d++ = (u_char) alphabet[s[2] & 0x3f];
+        s += 3;
+        len -= 3;
+    }
+
+    if (len) {
+        *d++ = (u_char) alphabet[s[0] >> 2];
+        if (len == 1) {
+            *d++ = (u_char) alphabet[(s[0] & 0x03) << 4];
+        } else {
+            *d++ = (u_char) alphabet[((s[0] & 0x03) << 4) | (s[1] >> 4)];
+            *d++ = (u_char) alphabet[(s[1] & 0x0f) << 2];
+        }
+    }
+
+    dst->len = (size_t) (d - dst->data);
+}
+
+
 void *
 ngx_palloc(ngx_pool_t *pool, size_t size)
 {

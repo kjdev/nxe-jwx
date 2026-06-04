@@ -690,3 +690,36 @@ test_pem_pubkey(EVP_PKEY *pkey, ngx_pool_t *pool)
     BIO_free(bio);
     return out;
 }
+
+
+ngx_str_t
+test_pem_privkey(EVP_PKEY *pkey, ngx_pool_t *pool)
+{
+    ngx_str_t empty = { 0, NULL };
+    ngx_str_t out = { 0, NULL };
+    BIO *bio;
+    BUF_MEM *mem;
+    u_char *buf;
+
+    bio = BIO_new(BIO_s_mem());
+    if (bio == NULL) {
+        return empty;
+    }
+    if (PEM_write_bio_PKCS8PrivateKey(bio, pkey, NULL, NULL, 0, NULL, NULL)
+        != 1)
+    {
+        BIO_free(bio);
+        return empty;
+    }
+    BIO_get_mem_ptr(bio, &mem);
+    buf = ngx_pnalloc(pool, mem->length);
+    if (buf == NULL) {
+        BIO_free(bio);
+        return empty;
+    }
+    memcpy(buf, mem->data, mem->length);
+    out.data = buf;
+    out.len = mem->length;
+    BIO_free(bio);
+    return out;
+}

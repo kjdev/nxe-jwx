@@ -94,4 +94,8 @@ ngx_int_t test_hmac_sign(const u_char *key, size_t key_len,
 ngx_str_t test_pem_pubkey(EVP_PKEY *pkey, ngx_pool_t *pool);
 
 
+/* Pool-allocated PEM-encoded PKCS#8 private key of pkey. */
+ngx_str_t test_pem_privkey(EVP_PKEY *pkey, ngx_pool_t *pool);
+
+
 #endif /* TEST_CRYPTO_H */

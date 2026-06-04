@@ -140,8 +140,10 @@ ngx_pool_cleanup_t *ngx_pool_cleanup_add(ngx_pool_t *pool, size_t size);
 /* --- base64 / base64url --- */
 
 #define ngx_base64_decoded_length(len) (((len) * 3) / 4)
+#define ngx_base64_encoded_length(len) (((len) + 2) / 3 * 4)
 
 ngx_int_t ngx_decode_base64url(ngx_str_t *dst, ngx_str_t *src);
+void ngx_encode_base64url(ngx_str_t *dst, ngx_str_t *src);
 
 
 #endif /* NGX_STUB_H */
