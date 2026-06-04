@@ -1,5 +1,19 @@
 # Changelog
 
+## [359b14c](../../commit/359b14c) - 2026-06-04
+
+### Fixed
+
+- Enforce decode size limits on `nxe_jwx_encode()` output
+  - The claims guard only bounded the raw `claims->len`, so a large
+    `kid`, base64url expansion, and the appended signature could push the
+    encoded header past `NXE_JWX_MAX_JWT_HEADER` or the final compact
+    token past `NXE_JWX_MAX_JWT_SIZE`, making `nxe_jwx_encode()` emit a
+    token that `nxe_jwx_decode()` rejects (asymmetric limits)
+  - The encoder now mirrors the decoder: it checks the encoded header
+    segment before signing and the assembled token length before
+    allocation, both failing with `NGX_ERROR`
+
 ## [91b6da8](../../commit/91b6da8) - 2026-06-04
 
 ### Added
