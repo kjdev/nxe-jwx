@@ -1,5 +1,29 @@
 # Changelog
 
+## [91b6da8](../../commit/91b6da8) - 2026-06-04
+
+### Added
+
+- Add `nxe_jwx_encode()` for signed JWT (JWS) issuing
+  - The library could only decode and verify tokens; relying-party
+    modules that mint their own session JWTs (e.g. nginx-auth-webauthn
+    issuing a session JWT after assertion verification) had no shared
+    issuing path and would have re-implemented JWS signing
+  - The encoder is the symmetric counterpart of `nxe_jwx_jws_verify()`:
+    it reuses the algorithm table, the EC curve check, and the ECDSA
+    conversion (now also the inverse, DER -> fixed-width `R||S`), so the
+    issuing and verifying policies cannot drift apart
+  - Supports `HS*` (with `NXE_JWX_HAVE_HMAC`), `RS*`, `PS*`,
+    `ES256/384/512/ES256K`, and `EdDSA`; `none` is rejected
+    unconditionally, regardless of build flags
+  - The payload is taken as a caller-serialised compact JSON object and
+    used verbatim (nxe-json has no object-building API); the encoder
+    checks it parses as an object and JSON-escapes the optional `kid` so
+    it cannot inject extra header parameters
+  - `out` is pool-allocated and NUL-terminated, matching the
+    token-string contract; because issuing is operator-driven, every
+    failure collapses to `NGX_ERROR` (no oracle)
+
 ## [aa7f761](../../commit/aa7f761) - 2026-06-01
 
 ### Added
