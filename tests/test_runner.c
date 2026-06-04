@@ -751,19 +751,46 @@ TEST(jwks_free_null){
 }
 
 TEST(jwks_rsa_modulus_too_small){
-    EVP_PKEY *pkey;
-    ngx_str_t jwk, doc;
+    /*
+     * Synthesize an RSA JWK whose modulus has BN_num_bits == 1024,
+     * below NXE_JWX_MIN_RSA_BITS (2048).  A 128-byte modulus with its
+     * most-significant bit set yields exactly 1024 bits.  Hand-crafting
+     * the JWK (mirroring jwks_rsa_modulus_too_large) avoids generating a
+     * real sub-2048-bit RSA key at test time, which static analyzers
+     * flag as insufficient key size, while still exercising the same
+     * BN_num_bits rejection path in nxe_jwx_jwks_parse.
+     */
+    size_t n_len = 1024 / 8;
+    u_char *n_buf;
+    static const u_char e_bytes[] = { 0x01, 0x00, 0x01 };
+    ngx_str_t n_b64, e_b64;
+    u_char *p;
+    static const char head[] = "{\"keys\":[{\"kty\":\"RSA\",\"n\":\"";
+    static const char mid[] = "\",\"e\":\"";
+    static const char tail[] = "\"}]}";
+    ngx_str_t doc;
 
-    pkey = test_gen_rsa(1024);
-    ASSERT(pkey != NULL);
-    jwk = test_jwk_rsa(pkey, NULL, NULL, pool);
-    ASSERT(jwk.len > 0);
-    doc = test_jwks_build(&jwk, 1, pool);
+    n_buf = ngx_pcalloc(pool, n_len);
+    ASSERT(n_buf != NULL);
+    n_buf[0] = 0x80;
+    n_b64 = test_b64url(n_buf, n_len, pool);
+    ASSERT(n_b64.len > 0);
+    e_b64 = test_b64url(e_bytes, sizeof(e_bytes), pool);
+    ASSERT(e_b64.len > 0);
 
-    /* 1024-bit RSA is below NXE_JWX_MIN_RSA_BITS (2048) -> rejected. */
+    doc.len = sizeof(head) - 1 + n_b64.len + sizeof(mid) - 1
+              + e_b64.len + sizeof(tail) - 1;
+    doc.data = ngx_pnalloc(pool, doc.len);
+    ASSERT(doc.data != NULL);
+    p = doc.data;
+    memcpy(p, head, sizeof(head) - 1); p += sizeof(head) - 1;
+    memcpy(p, n_b64.data, n_b64.len); p += n_b64.len;
+    memcpy(p, mid, sizeof(mid) - 1); p += sizeof(mid) - 1;
+    memcpy(p, e_b64.data, e_b64.len); p += e_b64.len;
+    memcpy(p, tail, sizeof(tail) - 1);
+
+    /* Modulus below NXE_JWX_MIN_RSA_BITS -> rejected. */
     ASSERT(nxe_jwx_jwks_parse(&doc, pool) == NULL);
-
-    EVP_PKEY_free(pkey);
     return 0;
 }
 
