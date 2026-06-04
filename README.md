@@ -32,6 +32,7 @@ JWT / JWS / JWKS library for nginx modules
 | `nxe_jwx_jwks_count` | Number of usable keys in a keyset |
 | `nxe_jwx_jwks_free` | Release a keyset early (frees `EVP_PKEY`s, disarms the pool cleanup) |
 | `nxe_jwx_jws_verify` | Verify a token against a keyset |
+| `nxe_jwx_encode` | Issue a signed compact JWS (JWT) |
 | `nxe_jwx_claims_get_*` | Typed accessors for top-level claims |
 
 `nxe_jwx_token_alg` / `nxe_jwx_token_kid` return a pointer whose
@@ -74,6 +75,29 @@ policy.
 - All failures (no usable key, signature mismatch, `alg` mismatch,
   `kid` miss, ...) collapse to `NGX_DECLINED`; callers cannot tell
   which check rejected the token, denying an oracle to attackers.
+
+## Issuing policy
+
+`nxe_jwx_encode` is the issuing counterpart of `nxe_jwx_jws_verify` and
+shares its algorithm table and ECDSA `R||S` ↔ DER conversion:
+
+- `none` is always rejected, regardless of build flags.
+- The payload is supplied as a caller-serialised compact JSON **object**
+  (`claims`), used verbatim. The encoder only checks that it parses as a
+  JSON object — escaping its contents is the caller's responsibility.
+  (nxe-json offers no object-building API, so this keeps the encoder
+  minimal and loosely coupled.)
+- The protected header always carries `"typ":"JWT"` alongside `"alg"`.
+  An optional `kid` is JSON-escaped via nxe-json before being embedded,
+  so an operator-supplied value cannot inject extra header parameters.
+- `key` is the HMAC secret bytes for `HS*` (requires `NXE_JWX_HAVE_HMAC`)
+  or a PEM-encoded **private** key for the asymmetric families. The key
+  type must match the requested algorithm (and curve, for `ES*`).
+- `out` is pool-allocated and NUL-terminated
+  (`out->data[out->len] == '\0'`), matching the token-string contract.
+- Because issuing is performed by the operator's own code, failure is
+  not an oracle: every error (unknown/forbidden `alg`, non-object
+  `claims`, key mismatch, crypto failure) collapses to `NGX_ERROR`.
 
 ## Known limitations
 
