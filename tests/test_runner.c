@@ -2644,6 +2644,64 @@ TEST(encode_claims_invalid_json_rejected){
     return 0;
 }
 
+/*
+ * A kid large enough that the base64url-encoded header segment exceeds
+ * NXE_JWX_MAX_JWT_HEADER must be rejected, mirroring the decode side's
+ * per-segment cap (otherwise the issued token would be undecodable).
+ */
+TEST(encode_oversized_header_rejected){
+    ngx_str_t alg_s = ngx_string("HS256");
+    ngx_str_t key = ngx_string("0123456789abcdef0123456789abcdef");
+    ngx_str_t claims = ngx_string("{\"sub\":\"x\"}");
+    ngx_str_t kid, out;
+
+    /* 6500 ASCII bytes -> header JSON ~6.5 KiB -> base64url > 8 KiB. */
+    kid.len = 6500;
+    kid.data = ngx_pnalloc(pool, kid.len);
+    ASSERT(kid.data != NULL);
+    ngx_memset(kid.data, 'a', kid.len);
+
+    ASSERT_EQ_INT(nxe_jwx_encode(pool, &alg_s, &kid, &claims, &key, &out),
+                  NGX_ERROR);
+    ASSERT(out.data == NULL && out.len == 0);
+    return 0;
+}
+
+/*
+ * A kid + claims combination where each individual cap (header segment,
+ * raw claims) passes but the assembled compact token exceeds
+ * NXE_JWX_MAX_JWT_SIZE must be rejected before emission.
+ */
+TEST(encode_oversized_token_rejected){
+    ngx_str_t alg_s = ngx_string("HS256");
+    ngx_str_t key = ngx_string("0123456789abcdef0123456789abcdef");
+    ngx_str_t kid, claims, out;
+    u_char *p;
+
+    /* Header base64url ~8 KiB, under the 8 KiB segment cap. */
+    kid.len = 6000;
+    kid.data = ngx_pnalloc(pool, kid.len);
+    ASSERT(kid.data != NULL);
+    ngx_memset(kid.data, 'a', kid.len);
+
+    /*
+     * claims {"x":"aaa..."} ~7 KiB raw, under the 16 KiB claims cap, but
+     * header + payload + signature together exceed 16 KiB.
+     */
+    claims.len = 7008;
+    claims.data = ngx_pnalloc(pool, claims.len);
+    ASSERT(claims.data != NULL);
+    p = claims.data;
+    ngx_memcpy(p, "{\"x\":\"", 6); p += 6;
+    ngx_memset(p, 'a', claims.len - 8); p += claims.len - 8;
+    ngx_memcpy(p, "\"}", 2);
+
+    ASSERT_EQ_INT(nxe_jwx_encode(pool, &alg_s, &kid, &claims, &key, &out),
+                  NGX_ERROR);
+    ASSERT(out.data == NULL && out.len == 0);
+    return 0;
+}
+
 TEST(encode_null_args_rejected){
     ngx_str_t alg_s = ngx_string("HS256");
     ngx_str_t key = ngx_string("0123456789abcdef0123456789abcdef");
@@ -2832,6 +2890,8 @@ main(void)
     RUN(encode_bad_pem_rejected);
     RUN(encode_claims_not_object_rejected);
     RUN(encode_claims_invalid_json_rejected);
+    RUN(encode_oversized_header_rejected);
+    RUN(encode_oversized_token_rejected);
     RUN(encode_null_args_rejected);
 
     printf("\n%d passed, %d failed\n", g_passed, g_failed);
