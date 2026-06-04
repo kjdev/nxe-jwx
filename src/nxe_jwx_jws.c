@@ -1031,6 +1031,18 @@ nxe_jwx_encode(ngx_pool_t *pool, const ngx_str_t *alg, const ngx_str_t *kid,
         return NGX_ERROR;
     }
 
+    /*
+     * Mirror the decode side: the encoded header segment must fit within
+     * NXE_JWX_MAX_JWT_HEADER, otherwise nxe_jwx_decode() would reject the
+     * token we are about to emit (a large kid can push it over the limit).
+     */
+    if (header_b64.len > NXE_JWX_MAX_JWT_HEADER) {
+        ngx_log_error(NGX_LOG_ERR, log, 0,
+                      "nxe_jwx: encode header segment exceeds %ui bytes",
+                      (ngx_uint_t) NXE_JWX_MAX_JWT_HEADER);
+        return NGX_ERROR;
+    }
+
     /* signing_input = header_b64 "." payload_b64 */
     signing_input.len = header_b64.len + 1 + payload_b64.len;
     signing_input.data = ngx_pnalloc(pool, signing_input.len);
@@ -1101,6 +1113,21 @@ nxe_jwx_encode(ngx_pool_t *pool, const ngx_str_t *alg, const ngx_str_t *kid,
 
     /* out = signing_input "." sig_b64, NUL-terminated. */
     out->len = signing_input.len + 1 + sig_b64.len;
+
+    /*
+     * Mirror the decode side: the final compact token must fit within
+     * NXE_JWX_MAX_JWT_SIZE.  base64url expansion plus the signature
+     * segment can push a claims-sized payload over the limit, so check
+     * the assembled length before allocating the output buffer.
+     */
+    if (out->len > NXE_JWX_MAX_JWT_SIZE) {
+        ngx_log_error(NGX_LOG_ERR, log, 0,
+                      "nxe_jwx: encode token exceeds %ui bytes",
+                      (ngx_uint_t) NXE_JWX_MAX_JWT_SIZE);
+        out->len = 0;
+        goto out;
+    }
+
     out->data = ngx_pnalloc(pool, out->len + 1);
     if (out->data == NULL) {
         out->len = 0;
