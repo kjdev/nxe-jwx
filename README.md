@@ -3,37 +3,71 @@
 JWT / JWS / JWKS library for nginx modules
 (NginX Extension JWX Library), distributed as a git submodule.
 
+## Why this exists
+
+nginx modules that handle JWTs tend to grow similar code on top of
+OpenSSL and jansson independently (base64url decoding, ECDSA `R||S` ↔
+DER conversion, JWKS parsing, kid lookup).  nxe-jwx consolidates this
+into a single submodule and standardises the "safest variant" of each
+operation:
+
+- an `alg` whitelist plus a hard `none` rejection
+- a kid-strict verification flow
+- fail-closed parsing (RSA bounds, `use="enc"` skip, empty-`kid`
+  rejection)
+- oracle resistance (all failures collapse to one status)
+
+OpenSSL and jansson stay hidden behind the opaque
+`nxe_jwx_token_t *` / `nxe_jwx_jwks_t *` handles, so callers never have
+to include `<openssl/...>` or `<jansson.h>` in their own headers.
+
 ## Features
 
-- JWT decode (header / payload / signature) with DoS guards
-- JWS signature verification:
+- **JWT decode** — split into header / payload / signature with DoS
+  guards: `NXE_JWX_MAX_JWT_SIZE` (16 KiB) and
+  `NXE_JWX_MAX_JWT_HEADER` (8 KiB) upper bounds are enforced.
+- **JWS signature verification**:
   - RSA: `RS256` / `RS384` / `RS512`
   - RSA-PSS: `PS256` / `PS384` / `PS512`
   - ECDSA: `ES256` / `ES384` / `ES512` / `ES256K`
   - EdDSA: `Ed25519`, `Ed448`
-  - HMAC: `HS256` / `HS384` / `HS512` (optional, `NXE_JWX_HAVE_HMAC`)
-  - `none` is always rejected
-- JWKS parsing (RSA / EC / OKP / `oct` optional) for both
-  OpenSSL 1.1.x and 3.0+
-- Keyval shortcut (multi-kid) for compatibility with nginx-auth-jwt
-- Typed claim accessors (string / integer / boolean / array / object)
+  - HMAC: `HS256` / `HS384` / `HS512`
+    (optional, build-time `NXE_JWX_HAVE_HMAC`)
+  - `none` is always rejected (cannot be enabled by any build flag)
+- **JWKS parsing** — RSA / EC / OKP / `oct` (optional) for both
+  OpenSSL 1.1.x and 3.0+.  Only the EVP_PKEY construction API branches
+  on the OpenSSL version.
+- **Keyval shortcut** — nginx-auth-jwt-compatible
+  `{"<kid>": "<PEM>", ...}` form (multi-kid).
+- **Typed claim accessors** — string / integer / boolean / array /
+  object in one call.  Registered-claim validation (`iss` / `aud` /
+  `exp`, ...) is intentionally out of scope (each consumer has its own
+  policy).
+- **Issuing** — `nxe_jwx_encode` produces a signed compact JWS (JWT),
+  reusing the verifier's algorithm table.
 
 ## Public API
+
+See [`src/nxe_jwx.h`](src/nxe_jwx.h) and the subheaders for details.
 
 | Function | Description |
 |----------|-------------|
 | `nxe_jwx_decode` | Decode a JWT into an opaque token |
-| `nxe_jwx_token_header` | Get the parsed header |
-| `nxe_jwx_token_payload` | Get the parsed payload |
-| `nxe_jwx_token_alg` | Get the `alg` header value |
-| `nxe_jwx_token_kid` | Get the `kid` header value |
-| `nxe_jwx_jwks_parse` | Parse a JWKS document |
+| `nxe_jwx_token_header` / `_payload` | Get the parsed header / payload |
+| `nxe_jwx_token_alg` / `_kid` | Get the `alg` / `kid` header value |
+| `nxe_jwx_jwks_parse` | Parse a JWKS document `{"keys":[...]}` |
 | `nxe_jwx_jwks_parse_keyval` | Parse a keyval-style JSON map (`{"kid": "<PEM>", ...}`; PEM public keys only) |
 | `nxe_jwx_jwks_count` | Number of usable keys in a keyset |
+| `nxe_jwx_jwks_has_kid` | Whether a given `kid` exists in the keyset |
 | `nxe_jwx_jwks_free` | Release a keyset early (frees `EVP_PKEY`s, disarms the pool cleanup) |
 | `nxe_jwx_jws_verify` | Verify a token against a keyset |
 | `nxe_jwx_encode` | Issue a signed compact JWS (JWT) |
-| `nxe_jwx_claims_get_*` | Typed accessors for top-level claims |
+| `nxe_jwx_claims_get_*` | Typed accessors for top-level claims (string / integer / boolean / array / object) |
+
+Status-returning APIs follow the three-value contract
+`NGX_OK` / `NGX_DECLINED` / `NGX_ERROR`.
+Callers should treat `NGX_DECLINED` as an authentication failure (401)
+and `NGX_ERROR` as an internal failure (5xx).
 
 `nxe_jwx_token_alg` / `nxe_jwx_token_kid` return a pointer whose
 `data` is NUL-terminated (`data[len] == '\0'`, inherited from
@@ -43,7 +77,8 @@ Callers may pass `data` directly to C string APIs (`strlen`,
 
 The library does **not** validate registered claims (`iss` / `aud` /
 `exp` / `iat` / `nbf` / `jti`); each upstream module enforces its own
-policy.
+policy (clock-skew tolerance, multiple `aud`, required-claim selection,
+...).
 
 ## Verification policy
 
@@ -64,7 +99,7 @@ policy.
 - RSA keys whose modulus falls outside `[NXE_JWX_MIN_RSA_BITS,
   NXE_JWX_MAX_RSA_BITS]` (default 2048…16384 bits) are rejected at
   parse time: too small to be secure, too large to bound the cost of
-  subsequent signature verifications.
+  subsequent signature verifications (slow-verify DoS).
 - Entries that declare an empty `kid` are rejected at parse time on
   both ingest paths: a JWK with `"kid": ""` in a JWKS document and a
   keyval map whose key is the empty string `""`.  An empty `kid` is
@@ -118,6 +153,12 @@ shares its algorithm table and ECDSA `R||S` ↔ DER conversion:
   pool teardown does not double-free.
 
 ## Integration
+
+From the consumer nginx module:
+
+```sh
+git submodule add -b <branch> <url> nxe-jwx
+```
 
 In the consumer module's `config`, source `nxe-json` first, then
 `nxe-jwx`:
@@ -189,4 +230,4 @@ tests.
 
 ## License
 
-See `LICENSE`.
+MIT.  See [`LICENSE`](LICENSE).
