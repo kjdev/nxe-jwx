@@ -85,6 +85,9 @@ struct nxe_jwx_key_s {
     ngx_str_t      alg;             /* may be empty */
     ngx_str_t      crv;             /* may be empty */
 
+    /* RFC 7638 thumbprint, base64url.  Empty if computation failed. */
+    ngx_str_t      thumbprint;
+
     /* Public-key handle.  NULL for oct keys. */
     EVP_PKEY      *pkey;
 
@@ -98,6 +101,13 @@ struct nxe_jwx_key_s {
 ngx_uint_t            nxe_jwx_jwks_size_internal(const nxe_jwx_jwks_t *jwks);
 struct nxe_jwx_key_s *nxe_jwx_jwks_key_at(const nxe_jwx_jwks_t *jwks,
     ngx_uint_t i);
+
+/* Key lookup, shared by nxe_jwx_jwks_has_{kid,thumbprint} and
+ * nxe_jwx_jws.c's key-selection policy. */
+struct nxe_jwx_key_s *nxe_jwx_jwks_find_by_kid(const nxe_jwx_jwks_t *jwks,
+    const ngx_str_t *kid);
+struct nxe_jwx_key_s *nxe_jwx_jwks_find_by_thumbprint(
+    const nxe_jwx_jwks_t *jwks, const ngx_str_t *thumbprint);
 
 
 #endif /* _NXE_JWX_INTERNAL_H_INCLUDED_ */

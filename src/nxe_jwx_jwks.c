@@ -38,6 +38,7 @@
 
 #include "nxe_jwx.h"
 #include "nxe_jwx_internal.h"
+#include "nxe_jwx_thumbprint.h"
 
 
 /* === Internal types === */
@@ -730,6 +731,7 @@ nxe_jwx_parse_one_key(struct nxe_jwx_key_s *k, nxe_json_t *jwk,
 {
     ngx_str_t kty;
     ngx_str_t use;
+    ngx_int_t rc;
 
     ngx_memzero(k, sizeof(*k));
 
@@ -784,23 +786,27 @@ nxe_jwx_parse_one_key(struct nxe_jwx_key_s *k, nxe_json_t *jwk,
     }
 
     if (kty.len == 3 && ngx_strncmp(kty.data, "RSA", 3) == 0) {
-        return nxe_jwx_parse_rsa(k, jwk, pool, log);
-    }
-    if (kty.len == 2 && ngx_strncmp(kty.data, "EC", 2) == 0) {
-        return nxe_jwx_parse_ec(k, jwk, pool, log);
-    }
-    if (kty.len == 3 && ngx_strncmp(kty.data, "OKP", 3) == 0) {
-        return nxe_jwx_parse_okp(k, jwk, pool, log);
-    }
+        rc = nxe_jwx_parse_rsa(k, jwk, pool, log);
+    } else if (kty.len == 2 && ngx_strncmp(kty.data, "EC", 2) == 0) {
+        rc = nxe_jwx_parse_ec(k, jwk, pool, log);
+    } else if (kty.len == 3 && ngx_strncmp(kty.data, "OKP", 3) == 0) {
+        rc = nxe_jwx_parse_okp(k, jwk, pool, log);
 #if (NXE_JWX_HAVE_HMAC)
-    if (kty.len == 3 && ngx_strncmp(kty.data, "oct", 3) == 0) {
-        return nxe_jwx_parse_oct(k, jwk, pool, log);
-    }
+    } else if (kty.len == 3 && ngx_strncmp(kty.data, "oct", 3) == 0) {
+        rc = nxe_jwx_parse_oct(k, jwk, pool, log);
 #endif
+    } else {
+        ngx_log_error(NGX_LOG_WARN, log, 0,
+                      "nxe_jwx: unsupported kty \"%V\"", &kty);
+        return NGX_DECLINED;
+    }
 
-    ngx_log_error(NGX_LOG_WARN, log, 0,
-                  "nxe_jwx: unsupported kty \"%V\"", &kty);
-    return NGX_DECLINED;
+    if (rc == NGX_OK && nxe_jwx_jwk_thumbprint(k, pool) == NGX_ERROR) {
+        ngx_log_error(NGX_LOG_WARN, log, 0,
+                      "nxe_jwx: failed to compute JWK thumbprint");
+    }
+
+    return rc;
 }
 
 
@@ -1122,6 +1128,12 @@ nxe_jwx_jwks_parse_keyval(const ngx_str_t *keyval_json, ngx_pool_t *pool)
             return NULL;
         }
 
+        if (nxe_jwx_jwk_thumbprint(k, pool) == NGX_ERROR) {
+            ngx_log_error(NGX_LOG_WARN, log, 0,
+                          "nxe_jwx: failed to compute JWK thumbprint for"
+                          " keyval %V", &kid);
+        }
+
         jwks->nkeys++;
     }
 
@@ -1144,23 +1156,83 @@ nxe_jwx_jwks_count(const nxe_jwx_jwks_t *jwks)
 }
 
 
-ngx_flag_t
-nxe_jwx_jwks_has_kid(const nxe_jwx_jwks_t *jwks, const ngx_str_t *kid)
+struct nxe_jwx_key_s *
+nxe_jwx_jwks_find_by_kid(const nxe_jwx_jwks_t *jwks, const ngx_str_t *kid)
 {
     ngx_uint_t i;
 
     if (jwks == NULL || kid == NULL || kid->len == 0 || kid->data == NULL) {
-        return 0;
+        return NULL;
     }
 
     for (i = 0; i < jwks->nkeys; i++) {
-        const struct nxe_jwx_key_s *k = &jwks->keys[i];
+        struct nxe_jwx_key_s *k = &jwks->keys[i];
 
         if (k->kid.len > 0 && nxe_jwx_str_eq(&k->kid, kid)) {
-            return 1;
+            return k;
         }
     }
-    return 0;
+    return NULL;
+}
+
+
+struct nxe_jwx_key_s *
+nxe_jwx_jwks_find_by_thumbprint(const nxe_jwx_jwks_t *jwks,
+    const ngx_str_t *thumbprint)
+{
+    ngx_uint_t i;
+
+    if (jwks == NULL || thumbprint == NULL || thumbprint->len == 0
+        || thumbprint->data == NULL)
+    {
+        return NULL;
+    }
+
+    for (i = 0; i < jwks->nkeys; i++) {
+        struct nxe_jwx_key_s *k = &jwks->keys[i];
+
+        if (k->thumbprint.len > 0 && nxe_jwx_str_eq(&k->thumbprint,
+                                                    thumbprint))
+        {
+            return k;
+        }
+    }
+    return NULL;
+}
+
+
+ngx_flag_t
+nxe_jwx_jwks_has_kid(const nxe_jwx_jwks_t *jwks, const ngx_str_t *kid)
+{
+    return nxe_jwx_jwks_find_by_kid(jwks, kid) != NULL ? 1 : 0;
+}
+
+
+ngx_int_t
+nxe_jwx_jwks_thumbprint(const nxe_jwx_jwks_t *jwks, ngx_uint_t i,
+    ngx_str_t *out)
+{
+    const struct nxe_jwx_key_s *k;
+
+    if (jwks == NULL || out == NULL || i >= jwks->nkeys) {
+        return NGX_DECLINED;
+    }
+
+    k = &jwks->keys[i];
+    if (k->thumbprint.len == 0) {
+        return NGX_DECLINED;
+    }
+
+    *out = k->thumbprint;
+    return NGX_OK;
+}
+
+
+ngx_flag_t
+nxe_jwx_jwks_has_thumbprint(const nxe_jwx_jwks_t *jwks,
+    const ngx_str_t *thumbprint)
+{
+    return nxe_jwx_jwks_find_by_thumbprint(jwks, thumbprint) != NULL ? 1 : 0;
 }
 
 

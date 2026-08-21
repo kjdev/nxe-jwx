@@ -45,12 +45,14 @@ nxe_jwx_module_deps="\
   $nxe_jwx_dir/src/nxe_jwx_jws.h \
   $nxe_jwx_dir/src/nxe_jwx_claims.h \
   $nxe_jwx_dir/src/nxe_jwx_internal.h \
+  $nxe_jwx_dir/src/nxe_jwx_thumbprint.h \
 "
 nxe_jwx_module_srcs="\
   $nxe_jwx_dir/src/nxe_jwx_decode.c \
   $nxe_jwx_dir/src/nxe_jwx_jwks.c \
   $nxe_jwx_dir/src/nxe_jwx_jws.c \
   $nxe_jwx_dir/src/nxe_jwx_claims.c \
+  $nxe_jwx_dir/src/nxe_jwx_thumbprint.c \
 "
 nxe_jwx_module_incs="\
   $nxe_json_module_incs \

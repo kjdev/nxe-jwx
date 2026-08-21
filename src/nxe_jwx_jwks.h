@@ -111,4 +111,38 @@ ngx_flag_t nxe_jwx_jwks_has_kid(const nxe_jwx_jwks_t *jwks,
     const ngx_str_t *kid);
 
 
+/*
+ * RFC 7638 thumbprint (base64url) of the i-th key, computed once at
+ * parse time and cached on the keyset.  `out` is set to point into
+ * keyset-owned memory (valid as long as the keyset is); the caller
+ * must not free it separately.
+ *
+ * Returns NGX_OK on success, NGX_DECLINED if `i` is out of range or
+ * the key's thumbprint could not be computed at parse time (the key
+ * remains otherwise usable, e.g. via nxe_jwx_jws_verify()).
+ *
+ * For an oct (HMAC) key, the thumbprint is a deterministic SHA-256 of
+ * the secret; treat it as sensitive and do not surface it to
+ * untrusted parties (e.g. in error responses or logs reachable by
+ * the client), as it enables offline verification of guessed
+ * secrets.
+ */
+ngx_int_t nxe_jwx_jwks_thumbprint(const nxe_jwx_jwks_t *jwks, ngx_uint_t i,
+    ngx_str_t *out);
+
+
+/*
+ * Report whether the keyset contains at least one key whose RFC 7638
+ * thumbprint matches the supplied value.  Returns 1 on match, 0
+ * otherwise (including a NULL or zero-length thumbprint).
+ *
+ * Mirrors nxe_jwx_jwks_has_kid(): pairs with
+ * nxe_jwx_jwks_verify_raw() for callers that want to disambiguate
+ * "no key for this keyid" from "signature did not verify" when
+ * logging.
+ */
+ngx_flag_t nxe_jwx_jwks_has_thumbprint(const nxe_jwx_jwks_t *jwks,
+    const ngx_str_t *thumbprint);
+
+
 #endif /* _NXE_JWX_JWKS_H_INCLUDED_ */
