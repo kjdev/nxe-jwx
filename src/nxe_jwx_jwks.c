@@ -1156,10 +1156,7 @@ nxe_jwx_jwks_has_kid(const nxe_jwx_jwks_t *jwks, const ngx_str_t *kid)
     for (i = 0; i < jwks->nkeys; i++) {
         const struct nxe_jwx_key_s *k = &jwks->keys[i];
 
-        if (k->kid.len == kid->len
-            && k->kid.len > 0
-            && ngx_strncmp(k->kid.data, kid->data, kid->len) == 0)
-        {
+        if (k->kid.len > 0 && nxe_jwx_str_eq(&k->kid, kid)) {
             return 1;
         }
     }

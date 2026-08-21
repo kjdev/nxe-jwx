@@ -30,6 +30,25 @@ nxe_jwx_log(ngx_pool_t *pool)
 }
 
 
+/* ngx_str_t equality, empty strings compare equal regardless of data. */
+static ngx_inline ngx_flag_t
+nxe_jwx_str_eq(const ngx_str_t *a, const ngx_str_t *b)
+{
+    if (a->len != b->len) {
+        return 0;
+    }
+    if (a->len == 0) {
+        return 1;
+    }
+    return ngx_memcmp(a->data, b->data, a->len) == 0 ? 1 : 0;
+}
+
+
+/* Base64url-encode `src` into a pool-allocated `dst` (defined in nxe_jwx_jws.c). */
+ngx_int_t nxe_jwx_encode_b64url(ngx_str_t *dst, const ngx_str_t *src,
+    ngx_pool_t *pool);
+
+
 /*
  * Token internals (defined in nxe_jwx_decode.c).
  *

@@ -107,19 +107,6 @@ nxe_jwx_lookup_alg(const ngx_str_t *alg)
 }
 
 
-static ngx_flag_t
-nxe_jwx_str_eq(const ngx_str_t *a, const ngx_str_t *b)
-{
-    if (a->len != b->len) {
-        return 0;
-    }
-    if (a->len == 0) {
-        return 1;
-    }
-    return ngx_memcmp(a->data, b->data, a->len) == 0 ? 1 : 0;
-}
-
-
 /*
  * Convert a raw ECDSA signature (R || S, fixed-width) into the DER
  * encoding that OpenSSL's EVP_DigestVerify* expects.  Returns a
@@ -616,7 +603,7 @@ nxe_jwx_jws_verify(const nxe_jwx_token_t *token, const nxe_jwx_jwks_t *jwks,
  * padding -- the form JWS requires).  ngx_encode_base64url sets
  * dst->len to the actual encoded length.
  */
-static ngx_int_t
+ngx_int_t
 nxe_jwx_encode_b64url(ngx_str_t *dst, const ngx_str_t *src, ngx_pool_t *pool)
 {
     ngx_str_t src_mut;
