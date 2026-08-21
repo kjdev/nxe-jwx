@@ -68,6 +68,51 @@ ngx_int_t nxe_jwx_jws_verify(const nxe_jwx_token_t *token,
 
 
 /*
+ * Verify a detached signature against a raw message, selecting the
+ * key by RFC 7638 thumbprint rather than "kid".  Callers that
+ * authenticate an arbitrary byte string outside of the JWS compact
+ * serialisation (e.g. an RFC 9421 HTTP signature base) use this
+ * instead of nxe_jwx_jws_verify(), which requires a decoded token.
+ *
+ * Arguments:
+ *   jwks   keyset to search.
+ *   keyid  base64url RFC 7638 thumbprint identifying the key; looked
+ *          up via the same cache nxe_jwx_jwks_thumbprint() reads.
+ *   alg    JWS algorithm name ("EdDSA", "ES256", "RS256", ...). May be
+ *          NULL or zero-length, in which case the algorithm is
+ *          derived from the key's kty/crv; this only succeeds for
+ *          OKP (-> EdDSA) and EC (-> ES256/384/512/ES256K, from the
+ *          key's curve). RSA and oct keys are ambiguous without an
+ *          explicit alg (RS/PS family, digest, or HMAC digest cannot
+ *          be inferred from kty alone) and always yield NGX_DECLINED
+ *          when alg is omitted. When alg IS given, it is validated
+ *          against the key exactly as nxe_jwx_jws_verify() does
+ *          (kty/curve compatibility, and byte-for-byte match against
+ *          the JWK's own "alg" parameter if it declared one).
+ *   msg    the exact bytes that were signed (verbatim, not base64url;
+ *          this function performs no JWS framing).
+ *   sig    the raw signature bytes (verbatim, not base64url; ECDSA
+ *          must be fixed-width R||S, matching the JWS convention, not
+ *          DER).
+ *   pool   allocation pool for intermediates (e.g. the ECDSA DER
+ *          conversion).
+ *
+ * Return value: same oracle-resistant contract as nxe_jwx_jws_verify:
+ *   NGX_OK        signature verified.
+ *   NGX_DECLINED  no key with that thumbprint, signature did NOT
+ *                 verify, or the algorithm could not be resolved /
+ *                 was rejected by policy. Indistinguishable by
+ *                 design; use nxe_jwx_jwks_has_thumbprint() if the
+ *                 caller needs to log "unknown keyid" specifically.
+ *   NGX_ERROR     internal failure (allocation, OpenSSL) or a NULL
+ *                 required argument.
+ */
+ngx_int_t nxe_jwx_jwks_verify_raw(const nxe_jwx_jwks_t *jwks,
+    const ngx_str_t *keyid, const ngx_str_t *alg, const ngx_str_t *msg,
+    const ngx_str_t *sig, ngx_pool_t *pool);
+
+
+/*
  * Build a signed compact JWS (JWT):
  *
  *     "<b64url header>.<b64url payload>.<b64url signature>"

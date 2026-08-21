@@ -596,6 +596,92 @@ nxe_jwx_jws_verify(const nxe_jwx_token_t *token, const nxe_jwx_jwks_t *jwks,
 }
 
 
+/*
+ * Derive the JWS algorithm from a key's kty/crv alone, for callers of
+ * nxe_jwx_jwks_verify_raw() that omit `alg`.  OKP and EC keys resolve
+ * unambiguously (EdDSA has one digest; a curve implies exactly one
+ * ES* entry).  RSA and oct are deliberately left unresolved: the
+ * digest (and, for RSA, the PKCS1-v1_5 vs. PSS padding) cannot be
+ * inferred from kty alone.
+ */
+static const nxe_jwx_alg_t *
+nxe_jwx_alg_from_key(const struct nxe_jwx_key_s *k)
+{
+    const nxe_jwx_alg_t *a;
+
+    switch (k->kty) {
+    case NXE_JWX_KTY_OKP:
+        for (a = nxe_jwx_algs; a->name != NULL; a++) {
+            if (a->family == NXE_JWX_ALG_FAMILY_EDDSA) {
+                return a;
+            }
+        }
+        return NULL;
+
+    case NXE_JWX_KTY_EC:
+        for (a = nxe_jwx_algs; a->name != NULL; a++) {
+            if (a->family == NXE_JWX_ALG_FAMILY_ECDSA
+                && nxe_jwx_ec_curve_matches(k->pkey, a->ec_curve))
+            {
+                return a;
+            }
+        }
+        return NULL;
+
+    default:
+        return NULL;
+    }
+}
+
+
+ngx_int_t
+nxe_jwx_jwks_verify_raw(const nxe_jwx_jwks_t *jwks, const ngx_str_t *keyid,
+    const ngx_str_t *alg_str, const ngx_str_t *msg, const ngx_str_t *sig,
+    ngx_pool_t *pool)
+{
+    struct nxe_jwx_key_s *k;
+    const nxe_jwx_alg_t *alg;
+    int rc;
+
+    if (jwks == NULL || keyid == NULL || msg == NULL || sig == NULL
+        || pool == NULL)
+    {
+        return NGX_ERROR;
+    }
+
+    if (sig->len == 0) {
+        return NGX_DECLINED;
+    }
+
+    k = nxe_jwx_jwks_find_by_thumbprint(jwks, keyid);
+    if (k == NULL) {
+        return NGX_DECLINED;
+    }
+
+    if (alg_str != NULL && alg_str->len > 0) {
+        alg = nxe_jwx_lookup_alg(alg_str);
+        if (alg == NULL) {
+            return NGX_DECLINED;
+        }
+    } else {
+        alg = nxe_jwx_alg_from_key(k);
+        if (alg == NULL) {
+            return NGX_DECLINED;
+        }
+    }
+
+    rc = nxe_jwx_verify_with_key(k, alg, msg, sig, pool);
+    if (rc == 1) {
+        return NGX_OK;
+    }
+    if (rc < 0) {
+        ngx_log_error(NGX_LOG_ERR, nxe_jwx_log(pool), 0,
+                      "nxe_jwx: internal error verifying raw signature");
+    }
+    return NGX_DECLINED;
+}
+
+
 /* === Issuing (nxe_jwx_encode) === */
 
 /*
