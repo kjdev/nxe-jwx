@@ -9,6 +9,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ### Added
 
+- Add RFC 7638 JWK thumbprints and `nxe_jwx_jwks_verify_raw()` for
+  detached signature verification
+  - Callers that authenticate an arbitrary byte string outside of the
+    JWS compact serialisation (e.g. an RFC 9421 HTTP signature base)
+    need to select a key by RFC 7638 thumbprint and verify a raw
+    message/signature pair. The public API never exposed `EVP_PKEY`,
+    so this required a new detached-verification entry point rather
+    than a `kid -> EVP_PKEY` lookup
+  - `nxe_jwx_jwks_parse()` / `nxe_jwx_jwks_parse_keyval()` now compute
+    each key's thumbprint once at parse time (re-deriving the
+    kty-mandated members from the `EVP_PKEY`, per RFC 7518's
+    minimal-length octet encoding) and cache it on the keyset;
+    `nxe_jwx_jwks_thumbprint()` / `nxe_jwx_jwks_has_thumbprint()`
+    expose it as a keyset-owned view, mirroring `nxe_jwx_jwks_has_kid()`
+  - `nxe_jwx_jwks_verify_raw()` selects the key by thumbprint and
+    reuses the existing algorithm table and `EVP_PKEY` verification
+    primitives from `nxe_jwx_jws_verify()`; when `alg` is omitted it is
+    derived from the key's `kty`/`crv` for OKP and EC keys only (RSA
+    and `oct` are ambiguous without an explicit `alg`). Failures
+    collapse to `NGX_DECLINED`, matching `nxe_jwx_jws_verify()`'s
+    oracle-resistant contract
 - Add `nxe_jwx_encode()` for signed JWT (JWS) issuing
   - The library could only decode and verify tokens; relying-party
     modules that mint their own session JWTs (e.g. nginx-auth-webauthn
