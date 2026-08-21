@@ -318,9 +318,10 @@ nxe_jwx_decode(const ngx_str_t *token_str, ngx_pool_t *pool)
         return NULL;
     }
 
-    /* Signature.  An empty signature segment is preserved as a zero-
-     * length buffer so the token round-trips through decode-only
-     * directives; nxe_jwx_jws_verify() will refuse to validate it. */
+    /* Signature.  An empty signature segment is preserved as a
+     * zero-length buffer so the token round-trips through
+     * decode-only directives;
+     * nxe_jwx_jws_verify() will refuse to validate it. */
     if (signature_b64.len == 0) {
         token->signature.data = NULL;
         token->signature.len = 0;
