@@ -16,7 +16,8 @@ SRCS = test_runner.c \
        ../src/nxe_jwx_decode.c \
        ../src/nxe_jwx_jwks.c \
        ../src/nxe_jwx_jws.c \
-       ../src/nxe_jwx_claims.c
+       ../src/nxe_jwx_claims.c \
+       ../src/nxe_jwx_thumbprint.c
 
 test_runner: $(SRCS)
 	$(CC) $(CFLAGS) -o $@ $(SRCS) $(LDFLAGS)

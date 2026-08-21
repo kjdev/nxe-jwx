@@ -1237,6 +1237,209 @@ TEST(jwks_kid_field_absent_ok){
 }
 
 
+/* === JWK thumbprints (RFC 7638) === */
+
+TEST(thumbprint_rsa_rfc7638_vector){
+    ngx_str_t doc = ngx_string(
+        "{\"keys\":[{\"kty\":\"RSA\","
+        "\"n\":\"0vx7agoebGcQSuuPiLJXZptN9nndrQmbXEps2aiAFbWhM78LhWx4cbbfAAtVT86zwu1RK7aPFFxuhDR1L6tSoc_BJECPebWKRXjBZCiFV4n3oknjhMstn64tZ_2W-5JsGY4Hc5n9yBXArwl93lqt7_RN5w6Cf0h4QyQ5v-65YGjQR0_FDW2QvzqY368QQMicAtaSqzs8KJZgnYb9c7d0zgdAZHzu6qMQvRL5hajrn1n91CbOpbISD08qNLyrdkt-bFTWhAI4vMQFh6WeZu0fM4lFd2NcRwr3XPksINHaQ-G_xBniIqbw0Ls1jF44-csFCur-kEgU8awapJzKnqDKgw\","
+        "\"e\":\"AQAB\",\"alg\":\"RS256\",\"kid\":\"2011-04-29\"}]}");
+    nxe_jwx_jwks_t *jwks;
+    ngx_str_t tp;
+
+    jwks = nxe_jwx_jwks_parse(&doc, pool);
+    ASSERT(jwks != NULL);
+    ASSERT_EQ_INT(nxe_jwx_jwks_count(jwks), 1);
+
+    ASSERT_EQ_INT(nxe_jwx_jwks_thumbprint(jwks, 0, &tp), NGX_OK);
+    ASSERT_STR_EQ(&tp, "NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs");
+    return 0;
+}
+
+TEST(thumbprint_okp_rfc8037_vector){
+    ngx_str_t doc = ngx_string(
+        "{\"keys\":[{\"kty\":\"OKP\",\"crv\":\"Ed25519\","
+        "\"x\":\"11qYAYKxCrfVS_7TyWQHOg7hcvPapiMlrwIaaPcHURo\"}]}");
+    nxe_jwx_jwks_t *jwks;
+    ngx_str_t tp;
+
+    jwks = nxe_jwx_jwks_parse(&doc, pool);
+    ASSERT(jwks != NULL);
+    ASSERT_EQ_INT(nxe_jwx_jwks_count(jwks), 1);
+
+    ASSERT_EQ_INT(nxe_jwx_jwks_thumbprint(jwks, 0, &tp), NGX_OK);
+    ASSERT_STR_EQ(&tp, "kPrK_qmxVWaYVA9wwBF6Iuo3vVzz7TxHCTwXBygrS4k");
+    return 0;
+}
+
+TEST(thumbprint_ec_p256_self_consistent){
+    /*
+     * No fixed RFC vector for EC; independently rebuild the RFC 7638
+     * canonical JSON from the JWK's own x/y (via nxe_json, not the
+     * library's thumbprint code) and check the hash agrees.
+     */
+    EVP_PKEY *pkey;
+    ngx_str_t jwk, doc, tp, crv, x, y, canon, digest_str, expect;
+    nxe_jwx_jwks_t *jwks;
+    nxe_json_t *obj;
+    u_char canon_buf[256];
+    u_char digest[EVP_MAX_MD_SIZE];
+    unsigned int digest_len;
+    int n;
+
+    pkey = test_gen_ec(NID_X9_62_prime256v1);
+    ASSERT(pkey != NULL);
+    jwk = test_jwk_ec(pkey, "P-256", 32, "ec1", "ES256", pool);
+    ASSERT(jwk.len > 0);
+    doc = test_jwks_build(&jwk, 1, pool);
+
+    jwks = nxe_jwx_jwks_parse(&doc, pool);
+    ASSERT(jwks != NULL);
+
+    obj = nxe_json_parse(&jwk, pool);
+    ASSERT(obj != NULL);
+    ASSERT_EQ_INT(nxe_json_string(nxe_json_object_get(obj, "crv"), &crv),
+                  NGX_OK);
+    ASSERT_EQ_INT(nxe_json_string(nxe_json_object_get(obj, "x"), &x), NGX_OK);
+    ASSERT_EQ_INT(nxe_json_string(nxe_json_object_get(obj, "y"), &y), NGX_OK);
+
+    n = snprintf((char *) canon_buf, sizeof(canon_buf),
+                 "{\"crv\":\"%.*s\",\"kty\":\"EC\",\"x\":\"%.*s\",\"y\":\"%.*s\"}",
+                 (int) crv.len, (char *) crv.data,
+                 (int) x.len, (char *) x.data,
+                 (int) y.len, (char *) y.data);
+    ASSERT(n > 0 && (size_t) n < sizeof(canon_buf));
+    canon.data = canon_buf;
+    canon.len = (size_t) n;
+
+    ASSERT(EVP_Digest(canon.data, canon.len, digest, &digest_len,
+                      EVP_sha256(), NULL));
+    digest_str.data = digest;
+    digest_str.len = digest_len;
+    expect = test_b64url(digest_str.data, digest_str.len, pool);
+    ASSERT(expect.len > 0);
+
+    ASSERT_EQ_INT(nxe_jwx_jwks_thumbprint(jwks, 0, &tp), NGX_OK);
+    ASSERT_EQ_INT(tp.len, expect.len);
+    ASSERT_EQ_INT(ngx_memcmp(tp.data, expect.data, tp.len), 0);
+
+    nxe_json_free(obj);
+    EVP_PKEY_free(pkey);
+    return 0;
+}
+
+#if (NXE_JWX_HAVE_HMAC)
+TEST(thumbprint_oct_self_consistent){
+    static const u_char secret[] = "0123456789abcdef0123456789abcdef";
+    ngx_str_t jwk, doc, tp, k, canon, digest_str, expect;
+    nxe_jwx_jwks_t *jwks;
+    nxe_json_t *obj;
+    u_char canon_buf[256];
+    u_char digest[EVP_MAX_MD_SIZE];
+    unsigned int digest_len;
+    int n;
+
+    jwk = test_jwk_oct(secret, sizeof(secret) - 1, "h1", "HS256", pool);
+    ASSERT(jwk.len > 0);
+    doc = test_jwks_build(&jwk, 1, pool);
+
+    jwks = nxe_jwx_jwks_parse(&doc, pool);
+    ASSERT(jwks != NULL);
+
+    obj = nxe_json_parse(&jwk, pool);
+    ASSERT(obj != NULL);
+    ASSERT_EQ_INT(nxe_json_string(nxe_json_object_get(obj, "k"), &k), NGX_OK);
+
+    n = snprintf((char *) canon_buf, sizeof(canon_buf),
+                 "{\"k\":\"%.*s\",\"kty\":\"oct\"}",
+                 (int) k.len, (char *) k.data);
+    ASSERT(n > 0 && (size_t) n < sizeof(canon_buf));
+    canon.data = canon_buf;
+    canon.len = (size_t) n;
+
+    ASSERT(EVP_Digest(canon.data, canon.len, digest, &digest_len,
+                      EVP_sha256(), NULL));
+    digest_str.data = digest;
+    digest_str.len = digest_len;
+    expect = test_b64url(digest_str.data, digest_str.len, pool);
+    ASSERT(expect.len > 0);
+
+    ASSERT_EQ_INT(nxe_jwx_jwks_thumbprint(jwks, 0, &tp), NGX_OK);
+    ASSERT_EQ_INT(tp.len, expect.len);
+    ASSERT_EQ_INT(ngx_memcmp(tp.data, expect.data, tp.len), 0);
+
+    nxe_json_free(obj);
+    return 0;
+}
+#endif
+
+TEST(thumbprint_out_of_range){
+    EVP_PKEY *pkey;
+    ngx_str_t jwk, doc, tp;
+    nxe_jwx_jwks_t *jwks;
+
+    pkey = test_gen_rsa(2048); ASSERT(pkey != NULL);
+    jwk = test_jwk_rsa(pkey, "k1", "RS256", pool);
+    doc = test_jwks_build(&jwk, 1, pool);
+    jwks = nxe_jwx_jwks_parse(&doc, pool);
+    ASSERT(jwks != NULL);
+
+    ASSERT_EQ_INT(nxe_jwx_jwks_thumbprint(jwks, 1, &tp), NGX_DECLINED);
+    ASSERT_EQ_INT(nxe_jwx_jwks_thumbprint(jwks, 999, &tp), NGX_DECLINED);
+
+    EVP_PKEY_free(pkey);
+    return 0;
+}
+
+TEST(thumbprint_null_args){
+    EVP_PKEY *pkey;
+    ngx_str_t jwk, doc, tp;
+    nxe_jwx_jwks_t *jwks;
+
+    pkey = test_gen_rsa(2048); ASSERT(pkey != NULL);
+    jwk = test_jwk_rsa(pkey, "k1", "RS256", pool);
+    doc = test_jwks_build(&jwk, 1, pool);
+    jwks = nxe_jwx_jwks_parse(&doc, pool);
+    ASSERT(jwks != NULL);
+
+    ASSERT_EQ_INT(nxe_jwx_jwks_thumbprint(NULL, 0, &tp), NGX_DECLINED);
+    ASSERT_EQ_INT(nxe_jwx_jwks_thumbprint(jwks, 0, NULL), NGX_DECLINED);
+
+    ASSERT_EQ_INT(nxe_jwx_jwks_has_thumbprint(NULL, &tp), 0);
+    ASSERT_EQ_INT(nxe_jwx_jwks_has_thumbprint(jwks, NULL), 0);
+
+    EVP_PKEY_free(pkey);
+    return 0;
+}
+
+TEST(has_thumbprint_basic){
+    EVP_PKEY *p1, *p2;
+    ngx_str_t parts[2], doc, tp1;
+    nxe_jwx_jwks_t *jwks;
+    ngx_str_t unknown = ngx_string("not-a-real-thumbprint");
+    ngx_str_t empty = ngx_null_string;
+
+    p1 = test_gen_rsa(2048); ASSERT(p1 != NULL);
+    p2 = test_gen_rsa(2048); ASSERT(p2 != NULL);
+    parts[0] = test_jwk_rsa(p1, "k1", "RS256", pool);
+    parts[1] = test_jwk_rsa(p2, "k2", "RS256", pool);
+    doc = test_jwks_build(parts, 2, pool);
+    jwks = nxe_jwx_jwks_parse(&doc, pool);
+    ASSERT(jwks != NULL);
+
+    ASSERT_EQ_INT(nxe_jwx_jwks_thumbprint(jwks, 0, &tp1), NGX_OK);
+    ASSERT(tp1.len > 0);
+
+    ASSERT_EQ_INT(nxe_jwx_jwks_has_thumbprint(jwks, &tp1), 1);
+    ASSERT_EQ_INT(nxe_jwx_jwks_has_thumbprint(jwks, &unknown), 0);
+    ASSERT_EQ_INT(nxe_jwx_jwks_has_thumbprint(jwks, &empty), 0);
+
+    EVP_PKEY_free(p1);
+    EVP_PKEY_free(p2);
+    return 0;
+}
+
+
 /* === JWKS keyval === */
 
 TEST(jwks_keyval_pem_ok){
@@ -2335,6 +2538,232 @@ TEST(jws_null_args){
 }
 
 
+/* === nxe_jwx_jwks_verify_raw (detached signatures) === */
+
+TEST(verify_raw_eddsa_ok){
+    EVP_PKEY *pkey;
+    ngx_str_t jwk, doc, keyid, sig_s;
+    ngx_str_t msg = ngx_string(
+        "\"@method\": GET\n\"@target-uri\": https://example.com/\n");
+    nxe_jwx_jwks_t *jwks;
+    u_char *sig;
+    size_t sig_len;
+
+    pkey = test_gen_ed25519(); ASSERT(pkey != NULL);
+    jwk = test_jwk_okp(pkey, "Ed25519", 32, "k1", "EdDSA", pool);
+    doc = test_jwks_build(&jwk, 1, pool);
+    jwks = nxe_jwx_jwks_parse(&doc, pool);
+    ASSERT(jwks != NULL);
+    ASSERT_EQ_INT(nxe_jwx_jwks_thumbprint(jwks, 0, &keyid), NGX_OK);
+
+    ASSERT_EQ_INT(test_sign(pkey, NULL, 0, 0, msg.data, msg.len,
+                            &sig, &sig_len, pool), NGX_OK);
+    sig_s.data = sig;
+    sig_s.len = sig_len;
+
+    ASSERT_EQ_INT(nxe_jwx_jwks_verify_raw(jwks, &keyid, NULL, &msg, &sig_s,
+                                          pool), NGX_OK);
+
+    EVP_PKEY_free(pkey);
+    return 0;
+}
+
+TEST(verify_raw_eddsa_tampered){
+    EVP_PKEY *pkey;
+    ngx_str_t jwk, doc, keyid, sig_s;
+    ngx_str_t msg = ngx_string(
+        "\"@method\": GET\n\"@target-uri\": https://example.com/\n");
+    nxe_jwx_jwks_t *jwks;
+    u_char *sig;
+    size_t sig_len;
+
+    pkey = test_gen_ed25519(); ASSERT(pkey != NULL);
+    jwk = test_jwk_okp(pkey, "Ed25519", 32, "k1", "EdDSA", pool);
+    doc = test_jwks_build(&jwk, 1, pool);
+    jwks = nxe_jwx_jwks_parse(&doc, pool);
+    ASSERT(jwks != NULL);
+    ASSERT_EQ_INT(nxe_jwx_jwks_thumbprint(jwks, 0, &keyid), NGX_OK);
+
+    ASSERT_EQ_INT(test_sign(pkey, NULL, 0, 0, msg.data, msg.len,
+                            &sig, &sig_len, pool), NGX_OK);
+    sig[0] ^= 0xff;
+    sig_s.data = sig;
+    sig_s.len = sig_len;
+
+    ASSERT_EQ_INT(nxe_jwx_jwks_verify_raw(jwks, &keyid, NULL, &msg, &sig_s,
+                                          pool), NGX_DECLINED);
+
+    EVP_PKEY_free(pkey);
+    return 0;
+}
+
+TEST(verify_raw_unknown_keyid){
+    EVP_PKEY *pkey;
+    ngx_str_t jwk, doc, sig_s;
+    ngx_str_t msg = ngx_string("some signature base");
+    ngx_str_t bogus = ngx_string("does-not-exist-as-a-thumbprint");
+    nxe_jwx_jwks_t *jwks;
+    u_char *sig;
+    size_t sig_len;
+
+    pkey = test_gen_ed25519(); ASSERT(pkey != NULL);
+    jwk = test_jwk_okp(pkey, "Ed25519", 32, "k1", "EdDSA", pool);
+    doc = test_jwks_build(&jwk, 1, pool);
+    jwks = nxe_jwx_jwks_parse(&doc, pool);
+    ASSERT(jwks != NULL);
+
+    ASSERT_EQ_INT(test_sign(pkey, NULL, 0, 0, msg.data, msg.len,
+                            &sig, &sig_len, pool), NGX_OK);
+    sig_s.data = sig;
+    sig_s.len = sig_len;
+
+    ASSERT_EQ_INT(nxe_jwx_jwks_verify_raw(jwks, &bogus, NULL, &msg, &sig_s,
+                                          pool), NGX_DECLINED);
+
+    EVP_PKEY_free(pkey);
+    return 0;
+}
+
+TEST(verify_raw_rsa_alg_omitted_declined){
+    EVP_PKEY *pkey;
+    ngx_str_t jwk, doc, keyid, sig_s;
+    ngx_str_t msg = ngx_string("some signature base");
+    nxe_jwx_jwks_t *jwks;
+    static const u_char dummy_sig[] = "x";
+
+    pkey = test_gen_rsa(2048); ASSERT(pkey != NULL);
+    jwk = test_jwk_rsa(pkey, "k1", "RS256", pool);
+    doc = test_jwks_build(&jwk, 1, pool);
+    jwks = nxe_jwx_jwks_parse(&doc, pool);
+    ASSERT(jwks != NULL);
+    ASSERT_EQ_INT(nxe_jwx_jwks_thumbprint(jwks, 0, &keyid), NGX_OK);
+
+    sig_s.data = (u_char *) dummy_sig;
+    sig_s.len = sizeof(dummy_sig) - 1;
+
+    /* RSA is ambiguous (RS/PS family, digest) without an explicit alg. */
+    ASSERT_EQ_INT(nxe_jwx_jwks_verify_raw(jwks, &keyid, NULL, &msg, &sig_s,
+                                          pool), NGX_DECLINED);
+
+    EVP_PKEY_free(pkey);
+    return 0;
+}
+
+TEST(verify_raw_alg_key_mismatch_declined){
+    EVP_PKEY *pkey;
+    ngx_str_t jwk, doc, keyid, sig_s;
+    ngx_str_t msg = ngx_string("some signature base");
+    ngx_str_t alg = ngx_string("EdDSA");
+    nxe_jwx_jwks_t *jwks;
+    u_char *sig;
+    size_t sig_len;
+
+    pkey = test_gen_ec(NID_X9_62_prime256v1); ASSERT(pkey != NULL);
+    jwk = test_jwk_ec(pkey, "P-256", 32, "k1", "ES256", pool);
+    doc = test_jwks_build(&jwk, 1, pool);
+    jwks = nxe_jwx_jwks_parse(&doc, pool);
+    ASSERT(jwks != NULL);
+    ASSERT_EQ_INT(nxe_jwx_jwks_thumbprint(jwks, 0, &keyid), NGX_OK);
+
+    ASSERT_EQ_INT(test_sign(pkey, "SHA256", 0, 32, msg.data, msg.len,
+                            &sig, &sig_len, pool), NGX_OK);
+    sig_s.data = sig;
+    sig_s.len = sig_len;
+
+    /* Key is EC/P-256, but caller asserts EdDSA -> incompatible. */
+    ASSERT_EQ_INT(nxe_jwx_jwks_verify_raw(jwks, &keyid, &alg, &msg, &sig_s,
+                                          pool), NGX_DECLINED);
+
+    EVP_PKEY_free(pkey);
+    return 0;
+}
+
+TEST(verify_raw_ec_alg_omitted_ok){
+    EVP_PKEY *pkey;
+    ngx_str_t jwk, doc, keyid, sig_s;
+    ngx_str_t msg = ngx_string("some signature base");
+    nxe_jwx_jwks_t *jwks;
+    u_char *sig;
+    size_t sig_len;
+
+    pkey = test_gen_ec(NID_X9_62_prime256v1); ASSERT(pkey != NULL);
+    jwk = test_jwk_ec(pkey, "P-256", 32, "k1", "ES256", pool);
+    doc = test_jwks_build(&jwk, 1, pool);
+    jwks = nxe_jwx_jwks_parse(&doc, pool);
+    ASSERT(jwks != NULL);
+    ASSERT_EQ_INT(nxe_jwx_jwks_thumbprint(jwks, 0, &keyid), NGX_OK);
+
+    ASSERT_EQ_INT(test_sign(pkey, "SHA256", 0, 32, msg.data, msg.len,
+                            &sig, &sig_len, pool), NGX_OK);
+    sig_s.data = sig;
+    sig_s.len = sig_len;
+
+    /* alg omitted: EC is unambiguous, so ES256 must be inferred from
+     * the key's P-256 curve. */
+    ASSERT_EQ_INT(nxe_jwx_jwks_verify_raw(jwks, &keyid, NULL, &msg, &sig_s,
+                                          pool), NGX_OK);
+
+    EVP_PKEY_free(pkey);
+    return 0;
+}
+
+TEST(verify_raw_empty_signature_declined){
+    EVP_PKEY *pkey;
+    ngx_str_t jwk, doc, keyid;
+    ngx_str_t msg = ngx_string("some signature base");
+    ngx_str_t sig_s = ngx_null_string;
+    nxe_jwx_jwks_t *jwks;
+
+    pkey = test_gen_ed25519(); ASSERT(pkey != NULL);
+    jwk = test_jwk_okp(pkey, "Ed25519", 32, "k1", "EdDSA", pool);
+    doc = test_jwks_build(&jwk, 1, pool);
+    jwks = nxe_jwx_jwks_parse(&doc, pool);
+    ASSERT(jwks != NULL);
+    ASSERT_EQ_INT(nxe_jwx_jwks_thumbprint(jwks, 0, &keyid), NGX_OK);
+
+    ASSERT_EQ_INT(nxe_jwx_jwks_verify_raw(jwks, &keyid, NULL, &msg, &sig_s,
+                                          pool), NGX_DECLINED);
+
+    EVP_PKEY_free(pkey);
+    return 0;
+}
+
+TEST(verify_raw_null_args){
+    EVP_PKEY *pkey;
+    ngx_str_t jwk, doc, keyid, sig_s;
+    ngx_str_t msg = ngx_string("some signature base");
+    nxe_jwx_jwks_t *jwks;
+    u_char *sig;
+    size_t sig_len;
+
+    pkey = test_gen_ed25519(); ASSERT(pkey != NULL);
+    jwk = test_jwk_okp(pkey, "Ed25519", 32, "k1", "EdDSA", pool);
+    doc = test_jwks_build(&jwk, 1, pool);
+    jwks = nxe_jwx_jwks_parse(&doc, pool);
+    ASSERT(jwks != NULL);
+    ASSERT_EQ_INT(nxe_jwx_jwks_thumbprint(jwks, 0, &keyid), NGX_OK);
+
+    ASSERT_EQ_INT(test_sign(pkey, NULL, 0, 0, msg.data, msg.len,
+                            &sig, &sig_len, pool), NGX_OK);
+    sig_s.data = sig;
+    sig_s.len = sig_len;
+
+    ASSERT_EQ_INT(nxe_jwx_jwks_verify_raw(NULL, &keyid, NULL, &msg, &sig_s,
+                                          pool), NGX_ERROR);
+    ASSERT_EQ_INT(nxe_jwx_jwks_verify_raw(jwks, NULL, NULL, &msg, &sig_s,
+                                          pool), NGX_ERROR);
+    ASSERT_EQ_INT(nxe_jwx_jwks_verify_raw(jwks, &keyid, NULL, NULL, &sig_s,
+                                          pool), NGX_ERROR);
+    ASSERT_EQ_INT(nxe_jwx_jwks_verify_raw(jwks, &keyid, NULL, &msg, NULL,
+                                          pool), NGX_ERROR);
+    ASSERT_EQ_INT(nxe_jwx_jwks_verify_raw(jwks, &keyid, NULL, &msg, &sig_s,
+                                          NULL), NGX_ERROR);
+
+    EVP_PKEY_free(pkey);
+    return 0;
+}
+
+
 /* === JWS issuing (nxe_jwx_encode) round-trips === */
 
 /*
@@ -2854,6 +3283,17 @@ main(void)
     RUN(jwks_empty_kid_only_rejected);
     RUN(jwks_kid_field_absent_ok);
 
+    /* JWK thumbprints (RFC 7638) */
+    RUN(thumbprint_rsa_rfc7638_vector);
+    RUN(thumbprint_okp_rfc8037_vector);
+    RUN(thumbprint_ec_p256_self_consistent);
+#if (NXE_JWX_HAVE_HMAC)
+    RUN(thumbprint_oct_self_consistent);
+#endif
+    RUN(thumbprint_out_of_range);
+    RUN(thumbprint_null_args);
+    RUN(has_thumbprint_basic);
+
     /* jwks keyval */
     RUN(jwks_keyval_pem_ok);
     RUN(jwks_keyval_ec_pem_verifies);
@@ -2899,6 +3339,16 @@ main(void)
     RUN(jws_ec_curve_mismatch);
     RUN(jws_es256_bad_sig_length);
     RUN(jws_null_args);
+
+    /* verify_raw (detached signatures) */
+    RUN(verify_raw_eddsa_ok);
+    RUN(verify_raw_eddsa_tampered);
+    RUN(verify_raw_unknown_keyid);
+    RUN(verify_raw_rsa_alg_omitted_declined);
+    RUN(verify_raw_alg_key_mismatch_declined);
+    RUN(verify_raw_ec_alg_omitted_ok);
+    RUN(verify_raw_empty_signature_declined);
+    RUN(verify_raw_null_args);
 
     /* encode (issuing) */
     RUN(encode_rs256_roundtrip);
