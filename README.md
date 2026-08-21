@@ -45,6 +45,13 @@ to include `<openssl/...>` or `<jansson.h>` in their own headers.
   policy).
 - **Issuing** — `nxe_jwx_encode` produces a signed compact JWS (JWT),
   reusing the verifier's algorithm table.
+- **RFC 7638 thumbprints** — computed once per key at parse time and
+  cached on the keyset (`nxe_jwx_jwks_thumbprint` /
+  `nxe_jwx_jwks_has_thumbprint`).
+- **Detached signature verification** — `nxe_jwx_jwks_verify_raw`
+  selects a key by thumbprint and verifies an arbitrary byte string
+  (not necessarily a JWS compact serialization), for callers such as
+  RFC 9421 HTTP Message Signatures.
 
 ## Public API
 
@@ -59,8 +66,11 @@ See [`src/nxe_jwx.h`](src/nxe_jwx.h) and the subheaders for details.
 | `nxe_jwx_jwks_parse_keyval` | Parse a keyval-style JSON map (`{"kid": "<PEM>", ...}`; PEM public keys only) |
 | `nxe_jwx_jwks_count` | Number of usable keys in a keyset |
 | `nxe_jwx_jwks_has_kid` | Whether a given `kid` exists in the keyset |
+| `nxe_jwx_jwks_thumbprint` | RFC 7638 thumbprint (base64url) of the i-th key, cached at parse time |
+| `nxe_jwx_jwks_has_thumbprint` | Whether a given RFC 7638 thumbprint exists in the keyset |
 | `nxe_jwx_jwks_free` | Release a keyset early (frees `EVP_PKEY`s, disarms the pool cleanup) |
 | `nxe_jwx_jws_verify` | Verify a token against a keyset |
+| `nxe_jwx_jwks_verify_raw` | Verify a detached signature (raw message + signature bytes) against a keyset, keyed by RFC 7638 thumbprint |
 | `nxe_jwx_encode` | Issue a signed compact JWS (JWT) |
 | `nxe_jwx_claims_get_*` | Typed accessors for top-level claims (string / integer / boolean / array / object) |
 
