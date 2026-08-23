@@ -51,13 +51,18 @@
  *
  * Return value:
  *   NGX_OK        signature verified
- *   NGX_DECLINED  signature did NOT verify, or no key matched, or
- *                 the algorithm is rejected by policy.  The caller
- *                 cannot distinguish these cases (oracle-resistant).
- *   NGX_ERROR     internal failure (out of memory, OpenSSL error
- *                 unrelated to the signature itself, malformed
- *                 input that should have been caught during decode).
- *                 The caller should treat this as 5xx, not 401.
+ *   NGX_DECLINED  signature did NOT verify, no key matched, the
+ *                 algorithm is rejected by policy, or an internal
+ *                 verification error occurred while trying a key
+ *                 (e.g. a malformed ECDSA signature during DER
+ *                 conversion).  These cases are indistinguishable by
+ *                 design (oracle-resistant); internal errors are
+ *                 still logged at NGX_LOG_ERR so the operator can
+ *                 tell them apart out-of-band.
+ *   NGX_ERROR     token, jwks, or pool is NULL, or the token is
+ *                 missing its decoded signing input / signature
+ *                 (a decode-layer invariant violation, not an auth
+ *                 failure).
  *
  * Errors are logged via pool->log; details that would aid an
  * attacker (specific key tried, exact failure reason) are kept at
@@ -100,12 +105,14 @@ ngx_int_t nxe_jwx_jws_verify(const nxe_jwx_token_t *token,
  * Return value: same oracle-resistant contract as nxe_jwx_jws_verify:
  *   NGX_OK        signature verified.
  *   NGX_DECLINED  no key with that thumbprint, signature did NOT
- *                 verify, or the algorithm could not be resolved /
- *                 was rejected by policy. Indistinguishable by
- *                 design; use nxe_jwx_jwks_has_thumbprint() if the
- *                 caller needs to log "unknown keyid" specifically.
- *   NGX_ERROR     internal failure (allocation, OpenSSL) or a NULL
- *                 required argument.
+ *                 verify, the algorithm could not be resolved / was
+ *                 rejected by policy, or an internal verification
+ *                 error occurred while trying the key.
+ *                 Indistinguishable by design; use
+ *                 nxe_jwx_jwks_has_thumbprint() if the caller needs
+ *                 to log "unknown keyid" specifically, and check the
+ *                 log for internal errors (NGX_LOG_ERR).
+ *   NGX_ERROR     jwks, keyid, msg, sig, or pool is NULL.
  */
 ngx_int_t nxe_jwx_jwks_verify_raw(const nxe_jwx_jwks_t *jwks,
     const ngx_str_t *keyid, const ngx_str_t *alg, const ngx_str_t *msg,
