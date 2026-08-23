@@ -76,8 +76,14 @@ See [`src/nxe_jwx.h`](src/nxe_jwx.h) and the subheaders for details.
 
 Status-returning APIs follow the three-value contract
 `NGX_OK` / `NGX_DECLINED` / `NGX_ERROR`.
-Callers should treat `NGX_DECLINED` as an authentication failure (401)
-and `NGX_ERROR` as an internal failure (5xx).
+For the verification entry points (`nxe_jwx_jws_verify`,
+`nxe_jwx_jwks_verify_raw`), callers should treat `NGX_DECLINED` as an
+authentication failure (401) and `NGX_ERROR` as an internal failure
+(5xx). Other status-returning APIs (e.g. `nxe_jwx_jwks_thumbprint`,
+which returns `NGX_DECLINED` for an out-of-range index or an
+unavailable thumbprint) reuse the same two values with a narrower,
+per-function meaning documented in their own header comment — the
+401/5xx mapping does not apply to them.
 
 `nxe_jwx_token_alg` / `nxe_jwx_token_kid` return a pointer whose
 `data` is NUL-terminated (`data[len] == '\0'`, inherited from
