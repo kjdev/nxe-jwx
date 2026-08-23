@@ -974,6 +974,81 @@ nxe_jwx_kty_from_pkey(EVP_PKEY *pkey)
 }
 
 
+/*
+ * Reverse-lookup an EC EVP_PKEY's curve entry so a PEM-only keyval
+ * source (which has no "crv" JSON field to read) can still populate
+ * k->crv for RFC 7638 thumbprint computation.
+ */
+static const nxe_jwx_ec_curve_t *
+nxe_jwx_ec_curve_from_pkey(EVP_PKEY *pkey)
+{
+    const nxe_jwx_ec_curve_t *c;
+
+#if OPENSSL_VERSION_NUMBER >= 0x30000000L
+    char name[80];
+    size_t name_len = 0;
+
+    if (EVP_PKEY_get_utf8_string_param(pkey, OSSL_PKEY_PARAM_GROUP_NAME,
+                                       name, sizeof(name), &name_len)
+        != 1)
+    {
+        return NULL;
+    }
+    for (c = nxe_jwx_ec_curves; c->jwk_crv != NULL; c++) {
+        if (ngx_strcmp(c->ossl_name, name) == 0) {
+            return c;
+        }
+    }
+    return NULL;
+#else
+    EC_KEY *ec;
+    const EC_GROUP *group;
+    int nid = NID_undef;
+
+    ec = EVP_PKEY_get1_EC_KEY(pkey);
+    if (ec == NULL) {
+        return NULL;
+    }
+    group = EC_KEY_get0_group(ec);
+    if (group != NULL) {
+        nid = EC_GROUP_get_curve_name(group);
+    }
+    EC_KEY_free(ec);
+
+    if (nid == NID_undef) {
+        return NULL;
+    }
+    for (c = nxe_jwx_ec_curves; c->jwk_crv != NULL; c++) {
+        if (c->nid == nid) {
+            return c;
+        }
+    }
+    return NULL;
+#endif
+}
+
+
+/*
+ * Reverse-lookup an OKP EVP_PKEY's curve entry.  EVP_PKEY_base_id
+ * already distinguishes Ed25519 from Ed448, so no version-specific
+ * introspection is required here.
+ */
+static const nxe_jwx_okp_curve_t *
+nxe_jwx_okp_curve_from_pkey(EVP_PKEY *pkey)
+{
+    const nxe_jwx_okp_curve_t *c;
+    int nid;
+
+    nid = EVP_PKEY_base_id(pkey);
+    for (c = nxe_jwx_okp_curves; c->jwk_crv != NULL; c++) {
+        if (c->nid == nid) {
+            return c;
+        }
+    }
+    return NULL;
+}
+
+
 nxe_jwx_jwks_t *
 nxe_jwx_jwks_parse_keyval(const ngx_str_t *keyval_json, ngx_pool_t *pool)
 {
@@ -1117,6 +1192,36 @@ nxe_jwx_jwks_parse_keyval(const ngx_str_t *keyval_json, ngx_pool_t *pool)
             EVP_PKEY_free(pkey);
             continue;
         }
+        if (kty == NXE_JWX_KTY_EC) {
+            const nxe_jwx_ec_curve_t *curve;
+
+            curve = nxe_jwx_ec_curve_from_pkey(pkey);
+            if (curve == NULL) {
+                ngx_log_error(NGX_LOG_WARN, log, 0,
+                              "nxe_jwx: keyval %V has an unsupported EC"
+                              " curve; skipped",
+                              &kid);
+                EVP_PKEY_free(pkey);
+                continue;
+            }
+            k->crv.data = (u_char *) curve->jwk_crv;
+            k->crv.len = ngx_strlen(curve->jwk_crv);
+        } else if (kty == NXE_JWX_KTY_OKP) {
+            const nxe_jwx_okp_curve_t *curve;
+
+            curve = nxe_jwx_okp_curve_from_pkey(pkey);
+            if (curve == NULL) {
+                ngx_log_error(NGX_LOG_WARN, log, 0,
+                              "nxe_jwx: keyval %V has an unsupported OKP"
+                              " curve; skipped",
+                              &kid);
+                EVP_PKEY_free(pkey);
+                continue;
+            }
+            k->crv.data = (u_char *) curve->jwk_crv;
+            k->crv.len = ngx_strlen(curve->jwk_crv);
+        }
+
         k->pkey = pkey;
         k->kty = kty;
 
