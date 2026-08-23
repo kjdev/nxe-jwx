@@ -1571,6 +1571,80 @@ TEST(jwks_keyval_ec_pem_verifies){
 }
 
 
+TEST(jwks_keyval_ec_thumbprint_matches_jwks){
+    /*
+     * The keyval loader has no "crv" JSON field to read, so it must
+     * reverse-derive the curve from the EVP_PKEY.  Cross-check its
+     * thumbprint against the same key parsed through the regular
+     * JWKS ({"keys": [...]}) path, which does read "crv" directly.
+     */
+    EVP_PKEY *pkey;
+    ngx_str_t pem, keyval_doc, jwk, jwks_doc, tp_keyval, tp_jwks;
+    nxe_jwx_jwks_t *jwks_from_keyval, *jwks_from_jwks;
+
+    pkey = test_gen_ec(NID_X9_62_prime256v1);
+    ASSERT(pkey != NULL);
+
+    pem = test_pem_pubkey(pkey, pool);
+    ASSERT(pem.len > 0);
+    keyval_doc = make_keyval_doc(&pem, pool);
+    ASSERT(keyval_doc.data != NULL);
+    jwks_from_keyval = nxe_jwx_jwks_parse_keyval(&keyval_doc, pool);
+    ASSERT(jwks_from_keyval != NULL);
+    ASSERT_EQ_INT(nxe_jwx_jwks_thumbprint(jwks_from_keyval, 0, &tp_keyval),
+                  NGX_OK);
+    ASSERT(tp_keyval.len > 0);
+
+    jwk = test_jwk_ec(pkey, "P-256", 32, "ec1", "ES256", pool);
+    ASSERT(jwk.len > 0);
+    jwks_doc = test_jwks_build(&jwk, 1, pool);
+    jwks_from_jwks = nxe_jwx_jwks_parse(&jwks_doc, pool);
+    ASSERT(jwks_from_jwks != NULL);
+    ASSERT_EQ_INT(nxe_jwx_jwks_thumbprint(jwks_from_jwks, 0, &tp_jwks),
+                  NGX_OK);
+
+    ASSERT_EQ_INT(tp_keyval.len, tp_jwks.len);
+    ASSERT_EQ_INT(ngx_memcmp(tp_keyval.data, tp_jwks.data, tp_keyval.len), 0);
+
+    EVP_PKEY_free(pkey);
+    return 0;
+}
+
+
+TEST(jwks_keyval_okp_thumbprint_matches_jwks){
+    EVP_PKEY *pkey;
+    ngx_str_t pem, keyval_doc, jwk, jwks_doc, tp_keyval, tp_jwks;
+    nxe_jwx_jwks_t *jwks_from_keyval, *jwks_from_jwks;
+
+    pkey = test_gen_ed25519();
+    ASSERT(pkey != NULL);
+
+    pem = test_pem_pubkey(pkey, pool);
+    ASSERT(pem.len > 0);
+    keyval_doc = make_keyval_doc(&pem, pool);
+    ASSERT(keyval_doc.data != NULL);
+    jwks_from_keyval = nxe_jwx_jwks_parse_keyval(&keyval_doc, pool);
+    ASSERT(jwks_from_keyval != NULL);
+    ASSERT_EQ_INT(nxe_jwx_jwks_thumbprint(jwks_from_keyval, 0, &tp_keyval),
+                  NGX_OK);
+    ASSERT(tp_keyval.len > 0);
+
+    jwk = test_jwk_okp(pkey, "Ed25519", 32, "okp1", "EdDSA", pool);
+    ASSERT(jwk.len > 0);
+    jwks_doc = test_jwks_build(&jwk, 1, pool);
+    jwks_from_jwks = nxe_jwx_jwks_parse(&jwks_doc, pool);
+    ASSERT(jwks_from_jwks != NULL);
+    ASSERT_EQ_INT(nxe_jwx_jwks_thumbprint(jwks_from_jwks, 0, &tp_jwks),
+                  NGX_OK);
+
+    ASSERT_EQ_INT(tp_keyval.len, tp_jwks.len);
+    ASSERT_EQ_INT(ngx_memcmp(tp_keyval.data, tp_jwks.data, tp_keyval.len), 0);
+
+    EVP_PKEY_free(pkey);
+    return 0;
+}
+
+
 TEST(jwks_keyval_empty_object){
     ngx_str_t doc = ngx_string("{}");
     ASSERT(nxe_jwx_jwks_parse_keyval(&doc, pool) == NULL);
@@ -3297,6 +3371,8 @@ main(void)
     /* jwks keyval */
     RUN(jwks_keyval_pem_ok);
     RUN(jwks_keyval_ec_pem_verifies);
+    RUN(jwks_keyval_ec_thumbprint_matches_jwks);
+    RUN(jwks_keyval_okp_thumbprint_matches_jwks);
     RUN(jwks_keyval_empty_object);
     RUN(jwks_keyval_empty_kid_skipped);
     RUN(jwks_keyval_empty_kid_only_rejected);
