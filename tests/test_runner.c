@@ -2781,6 +2781,64 @@ TEST(verify_raw_ec_alg_omitted_ok){
     return 0;
 }
 
+TEST(verify_raw_rsa_alg_explicit_ok){
+    EVP_PKEY *pkey;
+    ngx_str_t jwk, doc, keyid, sig_s;
+    ngx_str_t msg = ngx_string("some signature base");
+    ngx_str_t alg = ngx_string("RS256");
+    nxe_jwx_jwks_t *jwks;
+    u_char *sig;
+    size_t sig_len;
+
+    pkey = test_gen_rsa(2048); ASSERT(pkey != NULL);
+    jwk = test_jwk_rsa(pkey, "k1", "RS256", pool);
+    doc = test_jwks_build(&jwk, 1, pool);
+    jwks = nxe_jwx_jwks_parse(&doc, pool);
+    ASSERT(jwks != NULL);
+    ASSERT_EQ_INT(nxe_jwx_jwks_thumbprint(jwks, 0, &keyid), NGX_OK);
+
+    ASSERT_EQ_INT(test_sign(pkey, "SHA256", 0, 0, msg.data, msg.len,
+                            &sig, &sig_len, pool), NGX_OK);
+    sig_s.data = sig;
+    sig_s.len = sig_len;
+
+    /* RSA is ambiguous without alg, but an explicit RS256 resolves it. */
+    ASSERT_EQ_INT(nxe_jwx_jwks_verify_raw(jwks, &keyid, &alg, &msg, &sig_s,
+                                          pool), NGX_OK);
+
+    EVP_PKEY_free(pkey);
+    return 0;
+}
+
+TEST(verify_raw_hmac_alg_explicit_ok){
+    static const u_char secret[] = "0123456789abcdef0123456789abcdef";
+    ngx_str_t jwk, doc, keyid, sig_s;
+    ngx_str_t msg = ngx_string("some signature base");
+    ngx_str_t alg = ngx_string("HS256");
+    nxe_jwx_jwks_t *jwks;
+    u_char *sig;
+    size_t sig_len;
+
+    jwk = test_jwk_oct(secret, sizeof(secret) - 1, "k1", "HS256", pool);
+    ASSERT(jwk.len > 0);
+    doc = test_jwks_build(&jwk, 1, pool);
+    jwks = nxe_jwx_jwks_parse(&doc, pool);
+    ASSERT(jwks != NULL);
+    ASSERT_EQ_INT(nxe_jwx_jwks_thumbprint(jwks, 0, &keyid), NGX_OK);
+
+    ASSERT_EQ_INT(test_hmac_sign(secret, sizeof(secret) - 1, "SHA256",
+                                 msg.data, msg.len, &sig, &sig_len,
+                                 pool), NGX_OK);
+    sig_s.data = sig;
+    sig_s.len = sig_len;
+
+    /* oct is ambiguous without alg, but an explicit HS256 resolves it. */
+    ASSERT_EQ_INT(nxe_jwx_jwks_verify_raw(jwks, &keyid, &alg, &msg, &sig_s,
+                                          pool), NGX_OK);
+
+    return 0;
+}
+
 TEST(verify_raw_empty_signature_declined){
     EVP_PKEY *pkey;
     ngx_str_t jwk, doc, keyid;
@@ -3423,6 +3481,8 @@ main(void)
     RUN(verify_raw_rsa_alg_omitted_declined);
     RUN(verify_raw_alg_key_mismatch_declined);
     RUN(verify_raw_ec_alg_omitted_ok);
+    RUN(verify_raw_rsa_alg_explicit_ok);
+    RUN(verify_raw_hmac_alg_explicit_ok);
     RUN(verify_raw_empty_signature_declined);
     RUN(verify_raw_null_args);
 
