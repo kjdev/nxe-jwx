@@ -27,9 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     reuses the existing algorithm table and `EVP_PKEY` verification
     primitives from `nxe_jwx_jws_verify()`; when `alg` is omitted it is
     derived from the key's `kty`/`crv` for OKP and EC keys only (RSA
-    and `oct` are ambiguous without an explicit `alg`). Failures
+    and `oct` are ambiguous without an explicit `alg`). Verification
+    failures (no matching key, bad signature, rejected algorithm)
     collapse to `NGX_DECLINED`, matching `nxe_jwx_jws_verify()`'s
-    oracle-resistant contract
+    oracle-resistant contract; a NULL required argument still returns
+    `NGX_ERROR`
 - Add `nxe_jwx_encode()` for signed JWT (JWS) issuing
   - The library could only decode and verify tokens; relying-party
     modules that mint their own session JWTs (e.g. nginx-auth-webauthn
