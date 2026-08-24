@@ -78,8 +78,14 @@ Status-returning APIs follow the three-value contract
 `NGX_OK` / `NGX_DECLINED` / `NGX_ERROR`.
 For the verification entry points (`nxe_jwx_jws_verify`,
 `nxe_jwx_jwks_verify_raw`), callers should treat `NGX_DECLINED` as an
-authentication failure (401) and `NGX_ERROR` as an internal failure
-(5xx). Other status-returning APIs (e.g. `nxe_jwx_jwks_thumbprint`,
+authentication failure (401). `NGX_DECLINED` also covers internal
+errors hit while trying a candidate key (e.g. a malformed ECDSA
+signature during DER conversion); these collapse into the same value
+by design, for oracle resistance. `NGX_ERROR` is reserved narrowly for
+caller-contract violations — a required argument is `NULL`, or the
+token is missing its decoded signing input / signature — and should
+be treated as an internal failure (5xx). Other status-returning APIs
+(e.g. `nxe_jwx_jwks_thumbprint`,
 which returns `NGX_DECLINED` for an out-of-range index or an
 unavailable thumbprint) reuse the same two values with a narrower,
 per-function meaning documented in their own header comment — the
