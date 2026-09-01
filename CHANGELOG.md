@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-01
+
 ### Added
 
 - Add RFC 7638 JWK thumbprints and `nxe_jwx_jwks_verify_raw()` for
