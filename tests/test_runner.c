@@ -2896,6 +2896,178 @@ TEST(verify_raw_null_args){
 }
 
 
+/* === nxe_jwx_jwks_verify_raw_by_kid (detached signatures, by "kid") === */
+
+TEST(verify_raw_by_kid_ok){
+    EVP_PKEY *pkey;
+    ngx_str_t jwk, doc, sig_s;
+    ngx_str_t kid = ngx_string("k1");
+    ngx_str_t msg = ngx_string(
+        "\"@method\": GET\n\"@target-uri\": https://example.com/\n");
+    nxe_jwx_jwks_t *jwks;
+    u_char *sig;
+    size_t sig_len;
+
+    pkey = test_gen_ed25519(); ASSERT(pkey != NULL);
+    jwk = test_jwk_okp(pkey, "Ed25519", 32, "k1", "EdDSA", pool);
+    doc = test_jwks_build(&jwk, 1, pool);
+    jwks = nxe_jwx_jwks_parse(&doc, pool);
+    ASSERT(jwks != NULL);
+
+    ASSERT_EQ_INT(test_sign(pkey, NULL, 0, 0, msg.data, msg.len,
+                            &sig, &sig_len, pool), NGX_OK);
+    sig_s.data = sig;
+    sig_s.len = sig_len;
+
+    ASSERT_EQ_INT(nxe_jwx_jwks_verify_raw_by_kid(jwks, &kid, NULL, &msg,
+                                                 &sig_s, pool), NGX_OK);
+
+    EVP_PKEY_free(pkey);
+    return 0;
+}
+
+TEST(verify_raw_by_kid_tampered){
+    EVP_PKEY *pkey;
+    ngx_str_t jwk, doc, sig_s;
+    ngx_str_t kid = ngx_string("k1");
+    ngx_str_t msg = ngx_string(
+        "\"@method\": GET\n\"@target-uri\": https://example.com/\n");
+    nxe_jwx_jwks_t *jwks;
+    u_char *sig;
+    size_t sig_len;
+
+    pkey = test_gen_ed25519(); ASSERT(pkey != NULL);
+    jwk = test_jwk_okp(pkey, "Ed25519", 32, "k1", "EdDSA", pool);
+    doc = test_jwks_build(&jwk, 1, pool);
+    jwks = nxe_jwx_jwks_parse(&doc, pool);
+    ASSERT(jwks != NULL);
+
+    ASSERT_EQ_INT(test_sign(pkey, NULL, 0, 0, msg.data, msg.len,
+                            &sig, &sig_len, pool), NGX_OK);
+    sig[0] ^= 0xff;
+    sig_s.data = sig;
+    sig_s.len = sig_len;
+
+    ASSERT_EQ_INT(nxe_jwx_jwks_verify_raw_by_kid(jwks, &kid, NULL, &msg,
+                                                 &sig_s, pool), NGX_DECLINED);
+
+    EVP_PKEY_free(pkey);
+    return 0;
+}
+
+TEST(verify_raw_by_kid_unknown_kid){
+    EVP_PKEY *pkey;
+    ngx_str_t jwk, doc, sig_s;
+    ngx_str_t msg = ngx_string("some signature base");
+    ngx_str_t bogus = ngx_string("does-not-exist-as-a-kid");
+    nxe_jwx_jwks_t *jwks;
+    u_char *sig;
+    size_t sig_len;
+
+    pkey = test_gen_ed25519(); ASSERT(pkey != NULL);
+    jwk = test_jwk_okp(pkey, "Ed25519", 32, "k1", "EdDSA", pool);
+    doc = test_jwks_build(&jwk, 1, pool);
+    jwks = nxe_jwx_jwks_parse(&doc, pool);
+    ASSERT(jwks != NULL);
+
+    ASSERT_EQ_INT(test_sign(pkey, NULL, 0, 0, msg.data, msg.len,
+                            &sig, &sig_len, pool), NGX_OK);
+    sig_s.data = sig;
+    sig_s.len = sig_len;
+
+    ASSERT_EQ_INT(nxe_jwx_jwks_verify_raw_by_kid(jwks, &bogus, NULL, &msg,
+                                                 &sig_s, pool), NGX_DECLINED);
+
+    EVP_PKEY_free(pkey);
+    return 0;
+}
+
+TEST(verify_raw_by_kid_thumbprint_is_not_a_kid){
+    EVP_PKEY *pkey;
+    ngx_str_t jwk, doc, keyid, sig_s;
+    ngx_str_t msg = ngx_string("some signature base");
+    nxe_jwx_jwks_t *jwks;
+    u_char *sig;
+    size_t sig_len;
+
+    pkey = test_gen_ed25519(); ASSERT(pkey != NULL);
+    jwk = test_jwk_okp(pkey, "Ed25519", 32, "k1", "EdDSA", pool);
+    doc = test_jwks_build(&jwk, 1, pool);
+    jwks = nxe_jwx_jwks_parse(&doc, pool);
+    ASSERT(jwks != NULL);
+    ASSERT_EQ_INT(nxe_jwx_jwks_thumbprint(jwks, 0, &keyid), NGX_OK);
+
+    ASSERT_EQ_INT(test_sign(pkey, NULL, 0, 0, msg.data, msg.len,
+                            &sig, &sig_len, pool), NGX_OK);
+    sig_s.data = sig;
+    sig_s.len = sig_len;
+
+    /* The RFC 7638 thumbprint is not the raw "kid": looking it up via
+     * the kid path must not match, keeping the two selectors disjoint. */
+    ASSERT_EQ_INT(nxe_jwx_jwks_verify_raw_by_kid(jwks, &keyid, NULL, &msg,
+                                                 &sig_s, pool), NGX_DECLINED);
+
+    EVP_PKEY_free(pkey);
+    return 0;
+}
+
+TEST(verify_raw_by_kid_empty_signature_declined){
+    EVP_PKEY *pkey;
+    ngx_str_t jwk, doc;
+    ngx_str_t kid = ngx_string("k1");
+    ngx_str_t msg = ngx_string("some signature base");
+    ngx_str_t sig_s = ngx_null_string;
+    nxe_jwx_jwks_t *jwks;
+
+    pkey = test_gen_ed25519(); ASSERT(pkey != NULL);
+    jwk = test_jwk_okp(pkey, "Ed25519", 32, "k1", "EdDSA", pool);
+    doc = test_jwks_build(&jwk, 1, pool);
+    jwks = nxe_jwx_jwks_parse(&doc, pool);
+    ASSERT(jwks != NULL);
+
+    ASSERT_EQ_INT(nxe_jwx_jwks_verify_raw_by_kid(jwks, &kid, NULL, &msg,
+                                                 &sig_s, pool), NGX_DECLINED);
+
+    EVP_PKEY_free(pkey);
+    return 0;
+}
+
+TEST(verify_raw_by_kid_null_args){
+    EVP_PKEY *pkey;
+    ngx_str_t jwk, doc, sig_s;
+    ngx_str_t kid = ngx_string("k1");
+    ngx_str_t msg = ngx_string("some signature base");
+    nxe_jwx_jwks_t *jwks;
+    u_char *sig;
+    size_t sig_len;
+
+    pkey = test_gen_ed25519(); ASSERT(pkey != NULL);
+    jwk = test_jwk_okp(pkey, "Ed25519", 32, "k1", "EdDSA", pool);
+    doc = test_jwks_build(&jwk, 1, pool);
+    jwks = nxe_jwx_jwks_parse(&doc, pool);
+    ASSERT(jwks != NULL);
+
+    ASSERT_EQ_INT(test_sign(pkey, NULL, 0, 0, msg.data, msg.len,
+                            &sig, &sig_len, pool), NGX_OK);
+    sig_s.data = sig;
+    sig_s.len = sig_len;
+
+    ASSERT_EQ_INT(nxe_jwx_jwks_verify_raw_by_kid(NULL, &kid, NULL, &msg,
+                                                 &sig_s, pool), NGX_ERROR);
+    ASSERT_EQ_INT(nxe_jwx_jwks_verify_raw_by_kid(jwks, NULL, NULL, &msg,
+                                                 &sig_s, pool), NGX_ERROR);
+    ASSERT_EQ_INT(nxe_jwx_jwks_verify_raw_by_kid(jwks, &kid, NULL, NULL,
+                                                 &sig_s, pool), NGX_ERROR);
+    ASSERT_EQ_INT(nxe_jwx_jwks_verify_raw_by_kid(jwks, &kid, NULL, &msg,
+                                                 NULL, pool), NGX_ERROR);
+    ASSERT_EQ_INT(nxe_jwx_jwks_verify_raw_by_kid(jwks, &kid, NULL, &msg,
+                                                 &sig_s, NULL), NGX_ERROR);
+
+    EVP_PKEY_free(pkey);
+    return 0;
+}
+
+
 /* === JWS issuing (nxe_jwx_encode) round-trips === */
 
 /*
@@ -3485,6 +3657,14 @@ main(void)
     RUN(verify_raw_hmac_alg_explicit_ok);
     RUN(verify_raw_empty_signature_declined);
     RUN(verify_raw_null_args);
+
+    /* verify_raw_by_kid (detached signatures, selected by raw "kid") */
+    RUN(verify_raw_by_kid_ok);
+    RUN(verify_raw_by_kid_tampered);
+    RUN(verify_raw_by_kid_unknown_kid);
+    RUN(verify_raw_by_kid_thumbprint_is_not_a_kid);
+    RUN(verify_raw_by_kid_empty_signature_declined);
+    RUN(verify_raw_by_kid_null_args);
 
     /* encode (issuing) */
     RUN(encode_rs256_roundtrip);
