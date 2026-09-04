@@ -134,6 +134,14 @@ ngx_int_t nxe_jwx_jwks_verify_raw(const nxe_jwx_jwks_t *jwks,
  * operator-approved origin); it is not a drop-in replacement for
  * nxe_jwx_jwks_verify_raw() in the general case.
  *
+ * Unlike nxe_jwx_jwks_verify_raw(), which relies on the thumbprint's
+ * RFC 7638 uniqueness to select a single key, a JWKS is not required
+ * to have unique "kid" values (nxe_jwx_jwks_parse only rejects an
+ * empty kid).  When more than one key shares the requested kid --
+ * for example during a key-rotation overlap window -- every matching
+ * key is tried, mirroring nxe_jwx_jws_verify()'s kid-strict pass;
+ * the first one that verifies wins.
+ *
  * Arguments and return value: same contract as
  * nxe_jwx_jwks_verify_raw(), with `kid` (matched via the same lookup
  * nxe_jwx_jwks_has_kid() uses) in place of `keyid`.

@@ -700,7 +700,7 @@ nxe_jwx_jwks_verify_raw_by_kid(const nxe_jwx_jwks_t *jwks,
     const ngx_str_t *kid, const ngx_str_t *alg_str, const ngx_str_t *msg,
     const ngx_str_t *sig, ngx_pool_t *pool)
 {
-    struct nxe_jwx_key_s *k;
+    ngx_uint_t i, n;
 
     if (jwks == NULL || kid == NULL || msg == NULL || sig == NULL
         || pool == NULL)
@@ -712,12 +712,28 @@ nxe_jwx_jwks_verify_raw_by_kid(const nxe_jwx_jwks_t *jwks,
         return NGX_DECLINED;
     }
 
-    k = nxe_jwx_jwks_find_by_kid(jwks, kid);
-    if (k == NULL) {
-        return NGX_DECLINED;
+    /*
+     * A JWKS may contain more than one key sharing the same "kid"
+     * (nxe_jwx_jwks_parse only rejects an empty kid, not duplicates;
+     * e.g. a key-rotation overlap window).  Try every kid-matching
+     * key, mirroring nxe_jwx_jws_verify()'s kid-strict pass, instead
+     * of stopping at the first match.
+     */
+    n = nxe_jwx_jwks_size_internal(jwks);
+    for (i = 0; i < n; i++) {
+        struct nxe_jwx_key_s *k = nxe_jwx_jwks_key_at(jwks, i);
+
+        if (k == NULL || k->kid.len == 0 || !nxe_jwx_str_eq(kid, &k->kid)) {
+            continue;
+        }
+        if (nxe_jwx_jwks_verify_raw_with_key(k, alg_str, msg, sig, pool)
+            == NGX_OK)
+        {
+            return NGX_OK;
+        }
     }
 
-    return nxe_jwx_jwks_verify_raw_with_key(k, alg_str, msg, sig, pool);
+    return NGX_DECLINED;
 }
 
 
