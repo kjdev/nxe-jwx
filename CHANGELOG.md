@@ -27,6 +27,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
     not a drop-in replacement for `nxe_jwx_jwks_verify_raw()` in the
     general case
 
+### Fixed
+
+- Fix `nxe_jwx_jwks_verify_raw_by_kid()` to try every key sharing a
+  duplicate `kid` instead of only the first match
+  - `nxe_jwx_jwks_parse()` does not enforce `kid` uniqueness (it only
+    rejects an empty one), so a keyset can legitimately hold more than
+    one key under the same `kid` during a key-rotation overlap window.
+    The previous single-key lookup stopped at the first match, so a
+    valid signature verifiable only by a later key in that keyset was
+    incorrectly rejected
+  - Now walks the keyset the same way `nxe_jwx_jws_verify()`'s
+    kid-strict pass does, trying every kid-matching key and returning
+    `NGX_OK` on the first one that verifies
+
 ## [0.3.0] - 2026-09-01
 
 ### Added
