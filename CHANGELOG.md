@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-04
+
 ### Added
 
 - Add `nxe_jwx_jwks_verify_raw_by_kid()` for detached signature
