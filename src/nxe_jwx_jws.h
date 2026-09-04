@@ -120,6 +120,30 @@ ngx_int_t nxe_jwx_jwks_verify_raw(const nxe_jwx_jwks_t *jwks,
 
 
 /*
+ * Verify a detached signature against a raw message, selecting the
+ * key by its raw JWK "kid" member rather than an RFC 7638 thumbprint.
+ *
+ * Unlike nxe_jwx_jwks_verify_raw(), a "kid" is caller-assigned and not
+ * self-certifying: two different deployments (or a compromised
+ * document source) can label unrelated keys with the same short
+ * string, so a "kid" match does not by itself guarantee which public
+ * key a caller intended. This entry point exists for callers that
+ * have already decided -- as an explicit, scoped policy choice of
+ * their own -- to accept that trade-off for a keyset whose
+ * provenance they otherwise trust (e.g. a keyset limited to an
+ * operator-approved origin); it is not a drop-in replacement for
+ * nxe_jwx_jwks_verify_raw() in the general case.
+ *
+ * Arguments and return value: same contract as
+ * nxe_jwx_jwks_verify_raw(), with `kid` (matched via the same lookup
+ * nxe_jwx_jwks_has_kid() uses) in place of `keyid`.
+ */
+ngx_int_t nxe_jwx_jwks_verify_raw_by_kid(const nxe_jwx_jwks_t *jwks,
+    const ngx_str_t *kid, const ngx_str_t *alg, const ngx_str_t *msg,
+    const ngx_str_t *sig, ngx_pool_t *pool);
+
+
+/*
  * Build a signed compact JWS (JWT):
  *
  *     "<b64url header>.<b64url payload>.<b64url signature>"

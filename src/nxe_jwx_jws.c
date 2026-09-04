@@ -634,14 +634,47 @@ nxe_jwx_alg_from_key(const struct nxe_jwx_key_s *k)
 }
 
 
+/*
+ * Shared tail of nxe_jwx_jwks_verify_raw() / _by_kid(): both differ
+ * only in how `k` was found (thumbprint vs. raw "kid"), so alg
+ * resolution and the actual crypto verification live here once.
+ */
+static ngx_int_t
+nxe_jwx_jwks_verify_raw_with_key(const struct nxe_jwx_key_s *k,
+    const ngx_str_t *alg_str, const ngx_str_t *msg, const ngx_str_t *sig,
+    ngx_pool_t *pool)
+{
+    const nxe_jwx_alg_t *alg;
+    int rc;
+
+    if (alg_str != NULL && alg_str->len > 0) {
+        alg = nxe_jwx_lookup_alg(alg_str);
+    } else {
+        alg = nxe_jwx_alg_from_key(k);
+    }
+
+    if (alg == NULL) {
+        return NGX_DECLINED;
+    }
+
+    rc = nxe_jwx_verify_with_key(k, alg, msg, sig, pool);
+    if (rc == 1) {
+        return NGX_OK;
+    }
+    if (rc < 0) {
+        ngx_log_error(NGX_LOG_ERR, nxe_jwx_log(pool), 0,
+                      "nxe_jwx: internal error verifying raw signature");
+    }
+    return NGX_DECLINED;
+}
+
+
 ngx_int_t
 nxe_jwx_jwks_verify_raw(const nxe_jwx_jwks_t *jwks, const ngx_str_t *keyid,
     const ngx_str_t *alg_str, const ngx_str_t *msg, const ngx_str_t *sig,
     ngx_pool_t *pool)
 {
     struct nxe_jwx_key_s *k;
-    const nxe_jwx_alg_t *alg;
-    int rc;
 
     if (jwks == NULL || keyid == NULL || msg == NULL || sig == NULL
         || pool == NULL)
@@ -658,27 +691,33 @@ nxe_jwx_jwks_verify_raw(const nxe_jwx_jwks_t *jwks, const ngx_str_t *keyid,
         return NGX_DECLINED;
     }
 
-    if (alg_str != NULL && alg_str->len > 0) {
-        alg = nxe_jwx_lookup_alg(alg_str);
-        if (alg == NULL) {
-            return NGX_DECLINED;
-        }
-    } else {
-        alg = nxe_jwx_alg_from_key(k);
-        if (alg == NULL) {
-            return NGX_DECLINED;
-        }
+    return nxe_jwx_jwks_verify_raw_with_key(k, alg_str, msg, sig, pool);
+}
+
+
+ngx_int_t
+nxe_jwx_jwks_verify_raw_by_kid(const nxe_jwx_jwks_t *jwks,
+    const ngx_str_t *kid, const ngx_str_t *alg_str, const ngx_str_t *msg,
+    const ngx_str_t *sig, ngx_pool_t *pool)
+{
+    struct nxe_jwx_key_s *k;
+
+    if (jwks == NULL || kid == NULL || msg == NULL || sig == NULL
+        || pool == NULL)
+    {
+        return NGX_ERROR;
     }
 
-    rc = nxe_jwx_verify_with_key(k, alg, msg, sig, pool);
-    if (rc == 1) {
-        return NGX_OK;
+    if (sig->len == 0) {
+        return NGX_DECLINED;
     }
-    if (rc < 0) {
-        ngx_log_error(NGX_LOG_ERR, nxe_jwx_log(pool), 0,
-                      "nxe_jwx: internal error verifying raw signature");
+
+    k = nxe_jwx_jwks_find_by_kid(jwks, kid);
+    if (k == NULL) {
+        return NGX_DECLINED;
     }
-    return NGX_DECLINED;
+
+    return nxe_jwx_jwks_verify_raw_with_key(k, alg_str, msg, sig, pool);
 }
 
 
