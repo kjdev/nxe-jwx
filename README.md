@@ -51,7 +51,10 @@ to include `<openssl/...>` or `<jansson.h>` in their own headers.
 - **Detached signature verification** — `nxe_jwx_jwks_verify_raw`
   selects a key by thumbprint and verifies an arbitrary byte string
   (not necessarily a JWS compact serialization), for callers such as
-  RFC 9421 HTTP Message Signatures.
+  RFC 9421 HTTP Message Signatures. `nxe_jwx_jwks_verify_raw_by_kid`
+  is the same operation selecting by raw JWK `kid` instead, for
+  callers that have made an explicit, scoped policy choice to accept
+  that a `kid` is not self-certifying.
 
 ## Public API
 
@@ -71,13 +74,15 @@ See [`src/nxe_jwx.h`](src/nxe_jwx.h) and the subheaders for details.
 | `nxe_jwx_jwks_free` | Release a keyset early (frees `EVP_PKEY`s, disarms the pool cleanup) |
 | `nxe_jwx_jws_verify` | Verify a token against a keyset |
 | `nxe_jwx_jwks_verify_raw` | Verify a detached signature (raw message + signature bytes) against a keyset, keyed by RFC 7638 thumbprint |
+| `nxe_jwx_jwks_verify_raw_by_kid` | Same as `nxe_jwx_jwks_verify_raw`, but keyed by raw JWK `kid` instead of a thumbprint |
 | `nxe_jwx_encode` | Issue a signed compact JWS (JWT) |
 | `nxe_jwx_claims_get_*` | Typed accessors for top-level claims (string / integer / boolean / array / object) |
 
 Status-returning APIs follow the three-value contract
 `NGX_OK` / `NGX_DECLINED` / `NGX_ERROR`.
 For the verification entry points (`nxe_jwx_jws_verify`,
-`nxe_jwx_jwks_verify_raw`), callers should treat `NGX_DECLINED` as an
+`nxe_jwx_jwks_verify_raw`, `nxe_jwx_jwks_verify_raw_by_kid`), callers
+should treat `NGX_DECLINED` as an
 authentication failure (401). `NGX_DECLINED` also covers internal
 errors hit while trying a candidate key (e.g. a malformed ECDSA
 signature during DER conversion); these collapse into the same value
@@ -132,6 +137,12 @@ policy (clock-skew tolerance, multiple `aud`, required-claim selection,
 - All failures (no usable key, signature mismatch, `alg` mismatch,
   `kid` miss, ...) collapse to `NGX_DECLINED`; callers cannot tell
   which check rejected the token, denying an oracle to attackers.
+- `nxe_jwx_jwks_verify_raw_by_kid` selects its key by raw JWK `kid`
+  rather than an RFC 7638 thumbprint. A `kid` is caller-assigned and
+  not self-certifying, so this function is not fail-closed against
+  key confusion the way thumbprint selection is; it exists only for
+  callers that have already scoped its use to a keyset whose
+  provenance they otherwise trust.
 
 ## Issuing policy
 
