@@ -3067,6 +3067,38 @@ TEST(verify_raw_by_kid_null_args){
     return 0;
 }
 
+TEST(verify_raw_by_kid_duplicate_kid_tries_all_matches){
+    EVP_PKEY *pkey_a, *pkey_b;
+    ngx_str_t parts[2], doc, sig_s;
+    ngx_str_t kid = ngx_string("dup");
+    ngx_str_t msg = ngx_string("some signature base");
+    nxe_jwx_jwks_t *jwks;
+    u_char *sig;
+    size_t sig_len;
+
+    pkey_a = test_gen_ed25519(); ASSERT(pkey_a != NULL);
+    pkey_b = test_gen_ed25519(); ASSERT(pkey_b != NULL);
+
+    parts[0] = test_jwk_okp(pkey_a, "Ed25519", 32, "dup", "EdDSA", pool);
+    parts[1] = test_jwk_okp(pkey_b, "Ed25519", 32, "dup", "EdDSA", pool);
+    doc = test_jwks_build(parts, 2, pool);
+    jwks = nxe_jwx_jwks_parse(&doc, pool);
+    ASSERT(jwks != NULL);
+
+    /* Only the second key (pkey_b) can verify this signature. */
+    ASSERT_EQ_INT(test_sign(pkey_b, NULL, 0, 0, msg.data, msg.len,
+                            &sig, &sig_len, pool), NGX_OK);
+    sig_s.data = sig;
+    sig_s.len = sig_len;
+
+    ASSERT_EQ_INT(nxe_jwx_jwks_verify_raw_by_kid(jwks, &kid, NULL, &msg,
+                                                 &sig_s, pool), NGX_OK);
+
+    EVP_PKEY_free(pkey_a);
+    EVP_PKEY_free(pkey_b);
+    return 0;
+}
+
 
 /* === JWS issuing (nxe_jwx_encode) round-trips === */
 
@@ -3665,6 +3697,7 @@ main(void)
     RUN(verify_raw_by_kid_thumbprint_is_not_a_kid);
     RUN(verify_raw_by_kid_empty_signature_declined);
     RUN(verify_raw_by_kid_null_args);
+    RUN(verify_raw_by_kid_duplicate_kid_tries_all_matches);
 
     /* encode (issuing) */
     RUN(encode_rs256_roundtrip);
