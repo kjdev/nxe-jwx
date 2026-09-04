@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Add `nxe_jwx_jwks_verify_raw_by_kid()` for detached signature
+  verification keyed by raw JWK `kid`
+  - A downstream caller may need to accept a `kid` that is not an
+    RFC 7638 thumbprint as an explicit, scoped policy choice (e.g.
+    restricted to a keyset whose provenance it otherwise trusts). The
+    existing `nxe_jwx_jwks_verify_raw()` only selects by thumbprint, so
+    there was no way to do this without exposing `EVP_PKEY` outside the
+    opaque keyset API
+  - Mirrors `nxe_jwx_jwks_verify_raw()`'s contract exactly (algorithm
+    resolution, oracle-resistant `NGX_DECLINED` collapse, `NGX_ERROR`
+    for NULL arguments), substituting a `nxe_jwx_jwks_find_by_kid()`
+    lookup for the thumbprint lookup; both now share the post-lookup
+    algorithm-resolution and verification tail
+  - Unlike a thumbprint, a `kid` is caller-assigned and not
+    self-certifying: this function trades that guarantee away and is
+    not a drop-in replacement for `nxe_jwx_jwks_verify_raw()` in the
+    general case
+
 ## [0.3.0] - 2026-09-01
 
 ### Added
